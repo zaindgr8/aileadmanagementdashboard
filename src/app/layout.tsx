@@ -8,6 +8,14 @@ const lexend = Lexend({ variable: '--font-lexend', subsets: ['latin'], weight: [
 export const metadata: Metadata = {
   title: { default: 'AI Lead Management', template: '%s · AI Lead Management' },
   description: 'AI Lead Management by DevMate Solutions: WhatsApp AI agent, voice-call campaigns and one lead pipeline.',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/logo-mark.png', type: 'image/png' },
+    ],
+    shortcut: '/favicon.ico',
+    apple: '/logo-mark.png',
+  },
 };
 
 export const viewport: Viewport = {
