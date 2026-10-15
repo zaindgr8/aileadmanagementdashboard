@@ -1,0 +1,36 @@
+import { NextResponse, type NextRequest } from 'next/server';
+import { moduleForPath } from '@/lib/auth/modules';
+import { readSession, SESSION_COOKIE } from '@/lib/auth/session';
+
+// Twilio webhooks verify their own signature; the auth endpoint is how you sign in.
+const PUBLIC_PREFIXES = ['/api/auth', '/api/webhooks'];
+
+export function proxy(req: NextRequest) {
+  const { pathname } = req.nextUrl;
+  if (PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) return NextResponse.next();
+
+  const user = readSession(req.cookies.get(SESSION_COOKIE)?.value);
+  const isApi = pathname.startsWith('/api/');
+
+  if (pathname === '/login') {
+    return user ? NextResponse.redirect(new URL('/', req.url)) : NextResponse.next();
+  }
+  if (!user) {
+    if (isApi) return NextResponse.json({ error: 'Please sign in' }, { status: 401 });
+    const url = new URL('/login', req.url);
+    if (pathname !== '/') url.searchParams.set('next', pathname);
+    return NextResponse.redirect(url);
+  }
+
+  // Module access: a user only reaches the parts of the product they've been given.
+  const mod = moduleForPath(pathname);
+  if (mod && !user.modules.includes(mod)) {
+    if (isApi) return NextResponse.json({ error: 'You do not have access to this module' }, { status: 403 });
+    return NextResponse.redirect(new URL('/', req.url));
+  }
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|logo.png|logo-mark.png).*)'],
+};
