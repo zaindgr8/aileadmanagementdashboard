@@ -38,6 +38,10 @@ export interface Conversation {
   /** Username of the teammate handling this chat. */
   assignee?: string;
   assignedAt?: string;
+  /** How the agent should handle this particular person, written by the team ("be formal", "offer 10% off"…). */
+  aiInstructions?: string;
+  /** "add": on top of the agent's usual instructions. "replace": the agent's whole brief for this person. */
+  aiInstructionsMode?: "add" | "replace";
 }
 
 export const LEAD_STAGES = ["new", "qualified", "hot", "won", "lost"] as const;
@@ -124,6 +128,8 @@ export interface Settings {
   agentMode: AgentMode;
   forwardUrl: string;
   businessName: string;
+  /** What the team and customers call the agent, e.g. "Freya". Shown on every AI message. */
+  agentName: string;
   systemPrompt: string;
   model: AgentModel;
   effort: Effort;

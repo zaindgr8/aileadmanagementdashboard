@@ -50,8 +50,8 @@ export default function AgentPage() {
       <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
         <div className="mb-6 flex flex-wrap items-center gap-4">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">AI Agent</h1>
-            <p className="text-sm text-ink-2">Control who answers your WhatsApp leads, and how they&apos;re qualified.</p>
+            <h1 className="text-2xl font-semibold tracking-tight">{s?.agentName?.trim() || "Freya"}</h1>
+            <p className="text-sm text-ink-2">Your AI sales agent: who she is, how she answers your WhatsApp leads, and how they&apos;re qualified.</p>
           </div>
           <button onClick={() => { set("agentEnabled", !s.agentEnabled); save({ agentEnabled: !s.agentEnabled }); }}
             className={`btn ml-auto ${s.agentEnabled ? "" : "btn-primary"}`}>
@@ -97,8 +97,19 @@ export default function AgentPage() {
               )}
             </Card>
 
+            <Card title="Your agent" hint="Her name appears on every message she sends in the inbox, and she introduces herself with it.">
+              <div className="flex items-center gap-3">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-ai text-lg font-bold text-white">{(s.agentName || "F").slice(0, 1).toUpperCase()}</span>
+                <label className="block flex-1">
+                  <span className="mb-1 block text-xs font-medium text-ink-2">Name</span>
+                  <input className="input" maxLength={24} value={s.agentName ?? ""} placeholder="Freya" onChange={(e) => set("agentName", e.target.value)} />
+                </label>
+              </div>
+              {s.agentMode === "n8n" && <p className="mt-2 text-xs text-ink-3">Your n8n workflow writes the replies, so use the same name there.</p>}
+            </Card>
+
             {s.agentMode === "builtin" && <>
-            <Card title="Persona & instructions" hint="This is the system prompt. Use {{business}} for your business name.">
+            <Card title="Persona & instructions" hint="This is the system prompt. Use {{business}} for your business name and {{agent}} for her name.">
               <label className="mb-3 block">
                 <span className="mb-1 block text-xs font-medium text-ink-2">Business name</span>
                 <input className="input" value={s.businessName} onChange={(e) => set("businessName", e.target.value)} />

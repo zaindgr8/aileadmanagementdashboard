@@ -346,7 +346,7 @@ function General({ v, onSaved }: { v: View; onSaved: (v: View) => void }) {
         <dt className="text-ink-3">Modules</dt><dd>{w.modules.map((m) => (m === "whatsapp" ? "WhatsApp" : "Voice calls")).join(", ")}</dd>
         <dt className="text-ink-3">Created</dt><dd>{new Date(w.createdAt).toLocaleDateString()}</dd>
       </dl>
-      <p className="text-xs text-ink-3">To change your plan or add a module, contact DevMate Solutions.</p>
+      <p className="text-xs text-ink-3">To change your plan or add a module, contact the Sixty team at management@devmatesolutions.com.</p>
     </section>
   );
 }

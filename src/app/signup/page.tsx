@@ -45,7 +45,8 @@ export default function Signup() {
           {[
             ['Workspace created', true],
             ['Approval by our team (usually within a day)', false],
-            ['Connect WhatsApp and your AI agent', false],
+            ['We connect your number and train your agent', false],
+            ['Live in 7 days: every lead answered in 60 seconds', false],
           ].map(([t, ok], i) => (
             <li key={i} className="flex items-center gap-3">
               <span className={`grid h-6 w-6 place-items-center rounded-full text-xs font-semibold ${ok ? 'bg-ok text-white' : 'bg-panel-2 text-ink-3'}`}>{ok ? '✓' : i + 1}</span>
@@ -61,8 +62,8 @@ export default function Signup() {
   return (
     <AuthLayout>
       <form onSubmit={submit}>
-        <h1 className="font-display text-2xl font-semibold">Create your workspace</h1>
-        <p className="mt-1 text-sm text-ink-2">Your own inbox, AI agent and lead pipeline. We approve new workspaces before they go live.</p>
+        <h1 className="font-display text-2xl font-semibold">Start with Sixty</h1>
+        <p className="mt-1 text-sm text-ink-2">Your AI agent, shared inbox and lead pipeline. We review every new workspace, then help you go live in 7 days.</p>
 
         <div className="mt-6 flex flex-col gap-3.5">
           <Field icon={Building2} label="Company or brand">
@@ -84,12 +85,12 @@ export default function Signup() {
           </Field>
 
           <fieldset>
-            <legend className="mb-1.5 text-xs font-medium text-ink-2">What do you need?</legend>
+            <legend className="mb-1.5 text-xs font-medium text-ink-2">Which agents do you need?</legend>
             <div className="grid grid-cols-2 gap-2">
-              <span className="flex items-center gap-2 rounded-xl border border-brand bg-brand/5 px-3 py-2.5 text-sm font-medium"><MessageCircle size={16} className="text-brand" />WhatsApp</span>
+              <span className="flex items-center gap-2 rounded-xl border border-brand bg-brand/5 px-3 py-2.5 text-sm font-medium"><MessageCircle size={16} className="text-brand" />WhatsApp AI Agent</span>
               <label className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-medium ${f.calls ? 'border-brand bg-brand/5' : 'border-line'}`}>
                 <input type="checkbox" className="sr-only" checked={f.calls} onChange={set('calls')} />
-                <PhoneCall size={16} className={f.calls ? 'text-brand' : 'text-ink-3'} />AI voice calls
+                <PhoneCall size={16} className={f.calls ? 'text-brand' : 'text-ink-3'} />AI Call Agent
               </label>
             </div>
           </fieldset>

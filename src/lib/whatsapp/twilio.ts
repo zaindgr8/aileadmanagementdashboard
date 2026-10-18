@@ -141,6 +141,12 @@ export async function importHistory(limit = 1000, since?: Date) {
   return imported;
 }
 
+/** The text of a Content template (whichever type it is), for previews. */
+function templateBody(types: unknown): string {
+  for (const v of Object.values((types ?? {}) as Record<string, { body?: string }>)) if (v?.body) return v.body;
+  return "";
+}
+
 export async function listTemplates() {
   const items = await (await requireTwilio()).client.content.v1.contentAndApprovals.list({ limit: 100 });
   return items.map((t) => ({
@@ -150,6 +156,7 @@ export async function listTemplates() {
     variables: t.variables,
     status: (t.approvalRequests as { status?: string } | undefined)?.status ?? "unknown",
     types: Object.keys(t.types ?? {}),
+    body: templateBody(t.types),
   }));
 }
 

@@ -37,7 +37,7 @@ export default function Login() {
     <AuthLayout>
       <form onSubmit={submit}>
         <h1 className="font-display text-2xl font-semibold">Sign in</h1>
-        <p className="mt-1 text-sm text-ink-2">Welcome back to AI Lead Management.</p>
+        <p className="mt-1 text-sm text-ink-2">Welcome back. Your leads have been answered while you were away.</p>
 
         <div className="mt-7 flex flex-col gap-4">
           <label>
@@ -57,7 +57,7 @@ export default function Login() {
         <button type="submit" className="btn btn-primary mt-6 w-full py-2.5" disabled={busy || !username || !password}>
           {busy ? <Loader2 size={16} className="animate-spin" /> : <>Sign in <ArrowRight size={15} /></>}
         </button>
-        <p className="mt-6 text-center text-sm text-ink-2">New here? <Link href="/signup" className="font-medium text-brand hover:underline">Create a workspace</Link></p>
+        <p className="mt-6 text-center text-sm text-ink-2">New here? <Link href="/signup" className="font-medium text-brand hover:underline">Start with Sixty</Link></p>
       </form>
     </AuthLayout>
   );

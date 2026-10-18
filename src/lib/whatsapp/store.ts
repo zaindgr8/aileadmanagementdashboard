@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentMode: "builtin",
   forwardUrl: "",
   businessName: "My Business",
+  agentName: "Freya",
   systemPrompt: `You are the friendly WhatsApp assistant for {{business}}.
 
 - Reply in the customer's language, in short WhatsApp-style messages (1-3 sentences).
@@ -71,6 +72,8 @@ interface ConvRow {
   lead: Conversation["lead"] | null;
   assignee: string | null;
   assigned_at: string | null;
+  ai_instructions: string | null;
+  ai_instructions_mode: "add" | "replace" | null;
 }
 
 function toConversation(r: ConvRow): Conversation {
@@ -93,6 +96,8 @@ function toConversation(r: ConvRow): Conversation {
     lead: r.lead ?? undefined,
     assignee: r.assignee ?? undefined,
     assignedAt: isoOpt(r.assigned_at),
+    aiInstructions: r.ai_instructions || undefined,
+    aiInstructionsMode: r.ai_instructions_mode === "replace" ? "replace" : "add",
   };
 }
 
@@ -115,6 +120,8 @@ const CONV_COLUMNS: Record<keyof Conversation, keyof ConvRow> = {
   lead: "lead",
   assignee: "assignee",
   assignedAt: "assigned_at",
+  aiInstructions: "ai_instructions",
+  aiInstructionsMode: "ai_instructions_mode",
 };
 
 /** Map a partial Conversation to columns. A key set to undefined clears the column. */

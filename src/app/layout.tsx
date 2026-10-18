@@ -6,16 +6,9 @@ const inter = Inter({ variable: '--font-inter', subsets: ['latin'] });
 const lexend = Lexend({ variable: '--font-lexend', subsets: ['latin'], weight: ['500', '600', '700'] });
 
 export const metadata: Metadata = {
-  title: { default: 'AI Lead Management', template: '%s · AI Lead Management' },
-  description: 'AI Lead Management by DevMate Solutions: WhatsApp AI agent, voice-call campaigns and one lead pipeline.',
-  icons: {
-    icon: [
-      { url: '/favicon.ico', sizes: 'any' },
-      { url: '/logo-mark.png', type: 'image/png' },
-    ],
-    shortcut: '/favicon.ico',
-    apple: '/logo-mark.png',
-  },
+  title: { default: 'Sixty by DevMate', template: '%s · Sixty' },
+  description: 'Sixty by DevMate: AI WhatsApp and voice agents that answer every lead in 60 seconds, with one shared inbox and lead pipeline.',
+  // Icons come from app/icon.svg and app/apple-icon.png (the Sixty ring, as on sixty.devmatesolutions.com).
 };
 
 export const viewport: Viewport = {

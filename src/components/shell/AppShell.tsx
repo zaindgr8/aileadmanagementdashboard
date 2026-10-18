@@ -1,12 +1,12 @@
 'use client';
-import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, ChevronsLeft, ChevronsRight, LogOut, Menu, Moon, Search, Sun, X } from 'lucide-react';
 import WorkspaceSwitcher from './WorkspaceSwitcher';
+import { SixtyLogo, SixtyMark } from './SixtyLogo';
 import type { SessionUser } from '@/lib/auth/modules';
-import { api, displayName, useLive } from '@/lib/whatsapp/client';
+import { api, displayName, useAgentName, useLive } from '@/lib/whatsapp/client';
 import type { Conversation } from '@/lib/whatsapp/types';
 import { Avatar, ScoreRing } from '@/components/whatsapp/ui';
 import { isActive, navFor, type NavItem } from './nav';
@@ -26,7 +26,12 @@ export default function AppShell({ user, children }: { user: SessionUser; childr
   const path = usePathname();
   const router = useRouter();
   const { theme, toggle: toggleTheme } = useTheme();
-  const sections = useMemo(() => navFor(user), [user]);
+  const agentName = useAgentName();
+  // The AI agent page is named after the agent ("Freya").
+  const sections = useMemo(
+    () => navFor(user).map((s) => ({ ...s, items: s.items.map((i) => (i.href === '/whatsapp/agent' ? { ...i, label: agentName } : i)) })),
+    [user, agentName],
+  );
   const hasWa = user.modules.includes('whatsapp');
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -78,14 +83,8 @@ export default function AppShell({ user, children }: { user: SessionUser; childr
   const sidebar = (rail: boolean) => (
     <div className="flex h-full flex-col">
       <div className={`flex items-center gap-2.5 px-4 pb-5 pt-5 ${rail ? 'justify-center px-0' : ''}`}>
-        <Link href="/" className="flex min-w-0 items-center gap-2.5" title="AI Lead Management">
-          <Image src="/logo-mark.png" alt="" width={34} height={34} className="shrink-0 rounded-[9px]" priority />
-          {!rail && (
-            <span className="min-w-0 leading-tight">
-              <span className="block truncate font-display text-[15px] font-semibold text-white">AI Lead Management</span>
-              <span className="block text-[11px] text-side-ink">DevMate Solutions</span>
-            </span>
-          )}
+        <Link href="/" className="flex min-w-0 items-center gap-2.5 text-white" title="Sixty by DevMate">
+          {rail ? <SixtyMark size={32} className="text-[#E5484D]" /> : <SixtyLogo size={32} />}
         </Link>
       </div>
 
@@ -105,10 +104,10 @@ export default function AppShell({ user, children }: { user: SessionUser; childr
                 <div className="mb-1.5 flex items-center gap-2 px-2.5">
                   <span className="text-[10.5px] font-semibold uppercase tracking-[.08em] text-side-ink/80">{s.title}</span>
                   {s.module === 'whatsapp' && agentOn !== null && (
-                    <button onClick={toggleAgent} title={agentOn ? 'WhatsApp AI agent is live. Click to pause it everywhere.' : 'WhatsApp AI agent is paused. Click to resume.'}
+                    <button onClick={toggleAgent} title={agentOn ? `${agentName} is live on WhatsApp. Click to pause everywhere.` : `${agentName} is paused. Click to resume.`}
                       className={`ml-auto flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold ${agentOn ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'}`}>
                       <span className={`h-1.5 w-1.5 rounded-full ${agentOn ? 'pulse-dot bg-ok text-ok' : 'bg-warn'}`} />
-                      {agentOn ? 'AI live' : 'Paused'}
+                      {agentOn ? `${agentName} live` : 'Paused'}
                     </button>
                   )}
                 </div>
@@ -166,8 +165,7 @@ export default function AppShell({ user, children }: { user: SessionUser; childr
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-3 border-b border-line bg-panel px-3 py-2 md:hidden">
           <button onClick={() => setMobileOpen(true)} className="rounded-lg p-1.5 text-ink-2 hover:bg-panel-2" aria-label="Open menu"><Menu size={20} /></button>
-          <Image src="/logo-mark.png" alt="" width={26} height={26} className="rounded-md" />
-          <span className="font-display text-sm font-semibold">AI Lead Management</span>
+          <SixtyLogo size={26} by={false} />
           <button onClick={() => setPalette(true)} className="ml-auto rounded-lg p-1.5 text-ink-2 hover:bg-panel-2" aria-label="Search"><Search size={18} /></button>
         </header>
         <main className="min-h-0 flex-1">{children}</main>
@@ -178,7 +176,7 @@ export default function AppShell({ user, children }: { user: SessionUser; childr
       {palette && (
         <CommandPalette onClose={() => setPalette(false)} path={path} router={router} sections={sections} hasWa={hasWa}
           actions={[
-            ...(hasWa && agentOn !== null ? [{ id: 'agent', label: agentOn ? 'Pause WhatsApp AI agent everywhere' : 'Resume WhatsApp AI agent', icon: Bot, run: toggleAgent }] : []),
+            ...(hasWa && agentOn !== null ? [{ id: 'agent', label: agentOn ? `Pause ${agentName} everywhere` : `Resume ${agentName}`, icon: Bot, run: toggleAgent }] : []),
             { id: 'theme', label: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', icon: theme === 'dark' ? Sun : Moon, run: toggleTheme },
             { id: 'logout', label: 'Sign out', icon: LogOut, run: logout },
           ]} />

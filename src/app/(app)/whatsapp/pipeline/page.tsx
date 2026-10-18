@@ -93,7 +93,7 @@ export default function Pipeline() {
                     <div className="mt-2 flex items-center gap-2 text-[11px] text-ink-3">
                       {c.lead!.budget && <span className="rounded bg-panel-2 px-1.5 py-0.5 font-medium text-ink-2">{c.lead!.budget}</span>}
                       {c.needsHuman && <Hand size={12} className="text-warn" aria-label="Needs a human" />}
-                      {c.aiEnabled && <Bot size={12} className="text-ai" aria-label="AI on" />}
+                      {c.aiEnabled && <Bot size={12} className="text-ai" aria-label="Agent on" />}
                       {c.unread > 0 && <span className="h-1.5 w-1.5 rounded-full bg-brand" title={`${c.unread} unread`} />}
                       <span className="ml-auto tabular-nums">{timeAgo(c.lastMessageAt)}</span>
                     </div>

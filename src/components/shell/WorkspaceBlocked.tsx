@@ -16,7 +16,7 @@ export default function WorkspaceBlocked({ name, status }: { name: string; statu
         </span>
         <h1 className="mt-5 font-display text-xl font-semibold">{pending ? `${name} is waiting for approval` : `${name} is ${status === 'missing' ? 'not available' : 'suspended'}`}</h1>
         <p className="mt-2 text-sm text-ink-2">
-          {pending ? "We review every new workspace. You'll be able to use it as soon as it's approved." : 'Contact DevMate Solutions to restore access.'}
+          {pending ? "We review every new workspace. You'll be able to use it as soon as it's approved." : 'Contact the Sixty team at management@devmatesolutions.com to restore access.'}
         </p>
         <button onClick={logout} className="btn mx-auto mt-6"><LogOut size={15} />Sign out</button>
       </div>

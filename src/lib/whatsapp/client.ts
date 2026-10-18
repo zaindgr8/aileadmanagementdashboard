@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Conversation, LeadStage, Priority } from "./types";
 
 export async function api<T>(url: string, init?: RequestInit & { json?: unknown }): Promise<T> {
@@ -148,4 +148,35 @@ export function waitTone(sinceIso: string, priority?: Priority) {
   const mins = (Date.now() - new Date(sinceIso).getTime()) / 60_000;
   const target = priority === "P1" ? 15 : priority === "P2" ? 60 : 240;
   return mins >= target ? "bg-danger-soft text-danger" : mins >= target / 2 ? "bg-warn-soft text-warn" : "bg-panel-2 text-ink-2";
+}
+
+// ---------- the agent's name ----------
+// Each workspace names its AI agent (default "Freya"). Every screen shows that name instead of "AI".
+const DEFAULT_AGENT_NAME = "Freya";
+let agentName: string | null = null;
+let loadingName: Promise<void> | null = null;
+const nameSubs = new Set<(n: string) => void>();
+
+function setAgentName(n: string) {
+  agentName = n.trim() || DEFAULT_AGENT_NAME;
+  nameSubs.forEach((f) => f(agentName!));
+}
+function loadAgentName() {
+  loadingName ??= api<{ settings: { agentName?: string } }>("/api/whatsapp/settings")
+    .then((r) => setAgentName(r.settings.agentName ?? ""))
+    .catch(() => {})
+    .finally(() => { loadingName = null; });
+  return loadingName;
+}
+
+/** The workspace's agent name, e.g. "Freya". Updates live when it's renamed on the AI agent page. */
+export function useAgentName(): string {
+  const [name, setName] = useState(agentName ?? DEFAULT_AGENT_NAME);
+  useEffect(() => {
+    nameSubs.add(setName);
+    if (agentName === null) void loadAgentName();
+    return () => { nameSubs.delete(setName); };
+  }, []);
+  useLive((e) => { if (e.type === "settings") void loadAgentName(); });
+  return name;
 }

@@ -161,3 +161,9 @@ create table if not exists public.conversation_notes (
 );
 create index if not exists conversation_notes_conv_idx on public.conversation_notes (conversation_id, created_at);
 alter table public.conversation_notes enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- Per-lead instructions for the AI agent ("be formal with this one", "offer the discount"…).
+alter table public.conversations add column if not exists ai_instructions text;
+-- 'add': the instructions are added to the agent's usual prompt. 'replace': they are the agent's whole brief for this person.
+alter table public.conversations add column if not exists ai_instructions_mode text not null default 'add' check (ai_instructions_mode in ('add', 'replace'));

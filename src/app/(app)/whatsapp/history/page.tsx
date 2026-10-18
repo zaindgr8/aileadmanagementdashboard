@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Bot, Download, Search, User, UserRound } from "lucide-react";
-import { api } from "@/lib/whatsapp/client";
+import { api, useAgentName } from "@/lib/whatsapp/client";
 import type { Message } from "@/lib/whatsapp/types";
 
 type Row = Message & { contact: string };
@@ -15,6 +15,7 @@ const AUTHORS = [
 ];
 
 export default function HistoryPage() {
+  const agentName = useAgentName();
   const [q, setQ] = useState("");
   const [author, setAuthor] = useState("all");
   const [from, setFrom] = useState("");
@@ -48,7 +49,7 @@ export default function HistoryPage() {
             <input className="input pl-9" placeholder="Search messages or phone number" value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
           <select className="input w-auto" value={author} onChange={(e) => setAuthor(e.target.value)}>
-            {AUTHORS.map((a) => <option key={a.v} value={a.v}>{a.l}</option>)}
+            {AUTHORS.map((a) => <option key={a.v} value={a.v}>{a.v === "ai" ? agentName : a.l}</option>)}
           </select>
           <input type="date" className="input w-auto" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From date" />
           <input type="date" className="input w-auto" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To date" />
@@ -75,7 +76,7 @@ export default function HistoryPage() {
                   <td className="px-4 py-2.5">
                     <Link href={`/whatsapp?c=${encodeURIComponent(r.conversationId)}`} className="font-medium hover:text-brand">{r.contact}</Link>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-2.5"><AuthorBadge a={r.author} /></td>
+                  <td className="whitespace-nowrap px-4 py-2.5"><AuthorBadge a={r.author} agentName={agentName} /></td>
                   <td className="max-w-xl px-4 py-2.5"><p className="line-clamp-3 whitespace-pre-wrap">{r.body || (r.media.length ? "📎 Media" : "—")}</p></td>
                   <td className="hidden px-4 py-2.5 text-xs capitalize text-ink-2 md:table-cell">{r.status}</td>
                 </tr>
@@ -89,8 +90,8 @@ export default function HistoryPage() {
   );
 }
 
-function AuthorBadge({ a }: { a: string }) {
-  if (a === "ai") return <span className="inline-flex items-center gap-1 rounded-full bg-ai-soft px-2 py-0.5 text-xs font-medium text-ai"><Bot size={12} /> AI</span>;
+function AuthorBadge({ a, agentName }: { a: string; agentName: string }) {
+  if (a === "ai") return <span className="inline-flex items-center gap-1 rounded-full bg-ai-soft px-2 py-0.5 text-xs font-medium text-ai"><Bot size={12} /> {agentName}</span>;
   if (a === "agent") return <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-xs font-medium text-brand"><User size={12} /> Team</span>;
   return <span className="inline-flex items-center gap-1 rounded-full bg-panel-2 px-2 py-0.5 text-xs font-medium text-ink-2"><UserRound size={12} /> Customer</span>;
 }

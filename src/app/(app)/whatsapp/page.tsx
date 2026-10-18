@@ -2,12 +2,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownWideNarrow, ArrowLeft, Bot, Building2, Check, CheckCheck, CheckCircle2, ChevronDown, Clock, FileText, Globe, Hand, Loader2,
-  Mail, MinusCircle, PanelRight, PlusCircle, RefreshCw, Search, Send, Smile, Sparkles, StickyNote, Target, Timer, TriangleAlert, User, UserPlus, Wallet, X,
+  Mail, MinusCircle, PanelRight, PlusCircle, RefreshCw, Search, Send, Smile, Sparkles, SquarePen, StickyNote, Target, Timer, TriangleAlert, User, UserPlus, Wallet, X,
 } from "lucide-react";
-import { api, displayName, priorityRank, STAGE_META, timeAgo, useLive, waitingSince, waitTone } from "@/lib/whatsapp/client";
+import { api, displayName, priorityRank, STAGE_META, timeAgo, useAgentName, useLive, waitingSince, waitTone } from "@/lib/whatsapp/client";
 import { LEAD_STAGES, type Agent, type Conversation, type Lead, type Message, type Note } from "@/lib/whatsapp/types";
 import type { SessionUser } from "@/lib/auth/modules";
 import { Avatar, PriorityBadge, ScoreRing, StageChip } from "@/components/whatsapp/ui";
+import NewMessage from "@/components/whatsapp/NewMessage";
 
 type Conv = Conversation & { sessionOpen: boolean };
 type Template = { sid: string; name: string; language: string; status: string; variables: Record<string, string> };
@@ -36,8 +37,10 @@ function writePref(key: string, v: string) {
 }
 
 export default function Inbox() {
+  const agentName = useAgentName();
   const [convs, setConvs] = useState<Conv[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [composing, setComposing] = useState(false);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [sort, setSort] = useState<"recent" | "priority">("recent");
   const [view, setView] = useState<View>("all");
@@ -125,7 +128,7 @@ export default function Inbox() {
       unassigned: list.filter(needsOwner).length,
     };
   }, [list, inView, me]);
-  const agentName = useMemo(() => new Map(agents.map((a) => [a.username, a.name])), [agents]);
+  const teammateName = useMemo(() => new Map(agents.map((a) => [a.username, a.name])), [agents]);
 
   const visible = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -185,6 +188,9 @@ export default function Inbox() {
           <button onClick={sync} disabled={syncing} className="btn btn-ghost px-2 py-1.5 text-xs" title="Import past messages from Twilio">
             <RefreshCw size={14} className={syncing ? "animate-spin" : ""} /> Sync
           </button>
+          <button onClick={() => setComposing(true)} className="btn btn-primary h-8 w-8 p-0" title="New WhatsApp message" aria-label="New WhatsApp message">
+            <SquarePen size={15} />
+          </button>
         </div>
         <div className="px-4 pb-2">
           <div className="grid grid-cols-3 gap-1 rounded-xl bg-panel-2 p-1 text-xs font-medium" role="tablist">
@@ -219,7 +225,7 @@ export default function Inbox() {
             return (
               <button key={f.key} onClick={() => setFilter(f.key)}
                 className={`flex shrink-0 items-center rounded-full px-3 py-1 text-xs font-medium transition ${filter === f.key ? "bg-ink text-panel" : "bg-panel-2 text-ink-2 hover:text-ink"}`}>
-                {f.label}{n > 0 && <span className={`ml-1.5 rounded-full px-1.5 text-[10px] font-semibold tabular-nums ${f.key === "human" || f.key === "waiting" ? "bg-warn text-panel" : "bg-brand text-brand-ink"}`}>{n}</span>}
+                {f.key === "ai" ? agentName : f.label}{n > 0 && <span className={`ml-1.5 rounded-full px-1.5 text-[10px] font-semibold tabular-nums ${f.key === "human" || f.key === "waiting" ? "bg-warn text-panel" : "bg-brand text-brand-ink"}`}>{n}</span>}
               </button>
             );
           })}
@@ -231,7 +237,7 @@ export default function Inbox() {
               <span className="flex-1 space-y-2 pt-1"><span className="skeleton block h-3 w-2/3" /><span className="skeleton block h-3 w-full" /></span>
             </li>
           ))}
-          {visible.map((c) => { const w = waitingSince(c); const owner = c.assignee ? agentName.get(c.assignee) ?? c.assignee : ""; return (
+          {visible.map((c) => { const w = waitingSince(c); const owner = c.assignee ? teammateName.get(c.assignee) ?? c.assignee : ""; return (
             <li key={c.id}>
               <button onClick={() => select(c.id)} data-conv={c.id}
                 className={`relative flex w-full gap-3 px-4 py-3 text-left transition ${selected === c.id ? "bg-brand-soft/70" : "hover:bg-panel-2"}`}>
@@ -257,7 +263,7 @@ export default function Inbox() {
                       {w && <span title={`Waiting for a reply since ${new Date(w).toLocaleString()}`} className={`flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold tabular-nums ${waitTone(w, c.lead?.priority)}`}><Timer size={10} />{timeAgo(w)}</span>}
                       {c.needsHuman && <span title="Needs a human" className="rounded bg-warn-soft px-1.5 py-0.5 text-[10px] font-semibold text-warn">HUMAN</span>}
                       {owner && <span title={`Assigned to ${owner}`}><Avatar name={owner} size={18} /></span>}
-                      {c.aiEnabled ? <Bot size={14} className="text-ai" aria-label="AI on" /> : <User size={14} className="text-ink-3" aria-label="Manual" />}
+                      {c.aiEnabled ? <Bot size={14} className="text-ai" aria-label={`${agentName} on`} /> : <User size={14} className="text-ink-3" aria-label="Manual" />}
                       {c.lead && <ScoreRing score={c.lead.score} size={22} />}
                       {c.unread > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-brand px-1 text-[11px] font-semibold text-brand-ink">{c.unread}</span>}
                     </span>
@@ -289,7 +295,7 @@ export default function Inbox() {
           <div className="anim-rise text-center">
             <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-panel text-brand shadow-[var(--shadow)]"><Target size={28} /></div>
             <p className="font-semibold">Pick a lead to start</p>
-            <p className="mx-auto mt-1 max-w-xs text-sm text-ink-2">Watch the AI qualify leads live, take over any chat, or hand it back.</p>
+            <p className="mx-auto mt-1 max-w-xs text-sm text-ink-2">Watch {agentName} qualify leads live, take over any chat, or hand it back.</p>
             <div className="mt-4 flex flex-wrap justify-center gap-2">
               {counts.hot > 0 && (
                 <button onClick={() => { setFilter("hot"); setSort("priority"); }} className="btn text-xs">
@@ -306,6 +312,10 @@ export default function Inbox() {
         </div>
       )}
 
+      {composing && (
+        <NewMessage convs={convs ?? []} onClose={() => setComposing(false)}
+          onSent={async (id) => { setComposing(false); await loadList(); select(id); flash("Message sent"); }} />
+      )}
       {toast && <div className="anim-rise fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-ink px-4 py-2.5 text-sm text-panel shadow-lg">{toast}</div>}
     </div>
   );
@@ -314,9 +324,10 @@ export default function Inbox() {
 function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
   conv: Conv; agents: Agent[]; me: SessionUser | null; onBack: () => void; onChanged: () => void; flash: (m: string) => void; setLocal: (p: Partial<Conv>) => void;
 }) {
+  const agentName = useAgentName();
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
-  const [mode, setMode] = useState<"reply" | "note">("reply");
+  const [mode, setMode] = useState<"reply" | "note" | "brief">("reply");
   const [draft, setDraft] = useState("");
   const [drafting, setDrafting] = useState(false);
   const [showLead, setShowLead] = useState(false);
@@ -371,6 +382,7 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
       if (e.key === "e") patch({ status: conv.status === "open" ? "resolved" : "open" });
       else if (e.key === "r") { e.preventDefault(); setMode("reply"); inputRef.current?.focus(); }
       else if (e.key === "n") { e.preventDefault(); setMode("note"); inputRef.current?.focus(); }
+      else if (e.key === "b") { e.preventDefault(); setMode("brief"); }
       else if (e.key === "i") toggleLead();
     };
     window.addEventListener("keydown", onKey);
@@ -399,7 +411,7 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
     pendingRef.current = [...pendingRef.current, temp];
     setMessages((m) => [...(m ?? []), temp]);
     setDraft("");
-    if (conv.aiEnabled) { setLocal({ aiEnabled: false }); flash("You took over — AI paused for this chat"); }
+    if (conv.aiEnabled) { setLocal({ aiEnabled: false }); flash(`You took over — ${agentName} paused for this chat`); }
     try {
       await api(`/api/whatsapp/conversations/${encodeURIComponent(conv.id)}/messages`, { method: "POST", json: extra ?? { body } });
     } catch (e) {
@@ -448,7 +460,12 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
           </button>
           <div className="ml-auto flex items-center gap-1.5">
             <AssignMenu conv={conv} agents={agents} me={me} onAssign={(username) => patch({ assignee: username } as unknown as Partial<Conversation>)} />
-            <AiSwitch on={conv.aiEnabled} onChange={(v) => patch({ aiEnabled: v, ...(v ? { needsHuman: false } : {}) })} />
+            <button onClick={() => setMode("brief")}
+              title={conv.aiInstructions ? `${conv.aiInstructionsMode === "replace" ? `${agentName}'s own brief for this person` : `Extra instructions for ${agentName}`}:\n${conv.aiInstructions}` : `Give ${agentName} a custom brief for this person`}
+              className={`hidden items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-semibold md:inline-flex ${conv.aiInstructions ? "bg-ai-soft text-ai" : "border border-dashed border-line text-ink-3 hover:border-ai hover:text-ai"}`}>
+              <Sparkles size={13} /> {conv.aiInstructions ? (conv.aiInstructionsMode === "replace" ? "Own brief" : "Custom") : "Brief"}
+            </button>
+            <AiSwitch name={agentName} on={conv.aiEnabled} onChange={(v) => patch({ aiEnabled: v, ...(v ? { needsHuman: false } : {}) })} />
             <button onClick={() => patch({ status: conv.status === "open" ? "resolved" : "open" })}
               className="btn hidden px-2.5 py-1.5 text-xs sm:inline-flex" title={`${conv.status === "open" ? "Mark resolved" : "Reopen"}  (E)`}>
               <CheckCircle2 size={14} className={conv.status === "resolved" ? "text-ok" : ""} />
@@ -477,7 +494,7 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
           {groups.map(([day, items]) => (
             <div key={day}>
               <div className="pointer-events-none sticky top-2 z-10 my-3 flex justify-center"><span className="rounded-full border border-line bg-panel px-3 py-1 text-[11px] font-medium text-ink-2 shadow-md">{day}</span></div>
-              {items.map((m) => ("kind" in m ? <NoteBubble key={m.id} n={m} /> : <Bubble key={m.id} m={m} />))}
+              {items.map((m) => ("kind" in m ? <NoteBubble key={m.id} n={m} /> : <Bubble key={m.id} m={m} agentName={agentName} />))}
             </div>
           ))}
           {messages && !messages.length && <p className="mt-20 text-center text-sm text-ink-3">No messages yet.</p>}
@@ -491,9 +508,16 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
             <button onClick={() => { setMode("note"); inputRef.current?.focus(); }} className={`flex items-center gap-1 rounded-lg px-2.5 py-1 transition ${mode === "note" ? "bg-warn-soft text-warn" : "text-ink-3 hover:text-ink"}`}>
               <StickyNote size={13} /> Internal note
             </button>
+            <button onClick={() => setMode("brief")} className={`flex items-center gap-1 rounded-lg px-2.5 py-1 transition ${mode === "brief" ? "bg-ai-soft text-ai" : "text-ink-3 hover:text-ink"}`}>
+              <Sparkles size={13} /> Brief for {agentName}
+              {conv.aiInstructions && <span className="h-1.5 w-1.5 rounded-full bg-ai" />}
+            </button>
             {mode === "note" && <span className="ml-2 text-[11px] font-normal text-ink-3">Only your team sees this. Type @ to mention someone.</span>}
+            {mode === "brief" && <span className="ml-2 hidden text-[11px] font-normal text-ink-3 lg:inline">Never sent to the customer. Tells {agentName} how to handle this person.</span>}
           </div>
-          {mode === "reply" && !conv.sessionOpen && conv.lastInboundAt ? (
+          {mode === "brief" ? (
+            <AgentInstructions key={conv.id} conv={conv} agentName={agentName} onSave={async (p) => { await patch(p); flash(p.aiInstructions ? `${agentName} will follow the new brief from her next reply` : "Brief removed"); }} />
+          ) : mode === "reply" && !conv.sessionOpen && conv.lastInboundAt ? (
             <div className="flex flex-wrap items-center gap-3 rounded-xl bg-panel-2 px-4 py-3 text-sm">
               <Clock size={16} className="text-warn" />
               <span className="flex-1 text-ink-2">The 24-hour WhatsApp window is closed. You can only send an approved template until the customer replies.</span>
@@ -525,7 +549,7 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
                   else if (e.key === "Escape") inputRef.current?.blur();
                 }}
                 rows={Math.min(5, Math.max(1, draft.split("\n").length))}
-                placeholder={mode === "note" ? "Write an internal note…" : conv.aiEnabled ? "Type to take over from the AI…" : "Type a message"}
+                placeholder={mode === "note" ? "Write an internal note…" : conv.aiEnabled ? `Type to take over from ${agentName}…` : "Type a message"}
                 className={`input scroll-thin max-h-40 min-h-10 resize-none py-2.5 ${mode === "note" ? "border-warn/40 bg-warn-soft/40" : ""}`}
               />
               <button onClick={() => send()} disabled={!draft.trim()} className={`btn h-10 w-10 shrink-0 p-0 ${mode === "note" ? "bg-warn text-white" : "btn-primary"}`} aria-label={mode === "note" ? "Save note" : "Send"}>
@@ -534,8 +558,8 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
             </div>
           )}
           <p className="mt-1.5 hidden text-[11px] text-ink-3 md:block">
-            {conv.aiEnabled ? "AI is replying automatically. Sending a message yourself pauses it for this chat." : "AI is off for this chat — you're in control."}
-            <span className="ml-2 opacity-70"><span className="kbd">R</span> reply · <span className="kbd">N</span> note · <span className="kbd">E</span> resolve · <span className="kbd">I</span> lead</span>
+            {conv.aiEnabled ? `${agentName} is replying automatically. Sending a message yourself pauses ${agentName} for this chat.` : `${agentName} is off for this chat — you're in control.`}
+            <span className="ml-2 opacity-70"><span className="kbd">R</span> reply · <span className="kbd">N</span> note · <span className="kbd">B</span> brief · <span className="kbd">E</span> resolve · <span className="kbd">I</span> lead</span>
           </p>
         </footer>
       </section>
@@ -623,12 +647,12 @@ function NoteBubble({ n }: { n: Note }) {
   );
 }
 
-function AiSwitch({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+function AiSwitch({ name, on, onChange }: { name: string; on: boolean; onChange: (v: boolean) => void }) {
   return (
-    <button onClick={() => onChange(!on)} title={on ? "AI is replying — click to take over" : "You're in control — click to hand back to the AI"}
+    <button onClick={() => onChange(!on)} title={on ? `${name} is replying — click to take over` : `You're in control — click to hand back to ${name}`}
       className={`flex items-center gap-2 rounded-full border px-2.5 py-1.5 text-xs font-semibold transition ${on ? "border-transparent bg-ai-soft text-ai" : "border-line bg-panel text-ink-2"}`}>
-      {on ? <Bot size={14} /> : <User size={14} />}
-      <span className="hidden sm:inline">{on ? "AI on" : "Manual"}</span>
+      {on ? <AgentAvatar name={name} size={16} /> : <User size={14} />}
+      <span className="hidden sm:inline">{on ? `${name} on` : "Manual"}</span>
       <span className={`relative h-4 w-7 rounded-full transition ${on ? "bg-ai" : "bg-line"}`}>
         <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${on ? "left-3.5" : "left-0.5"}`} />
       </span>
@@ -636,7 +660,16 @@ function AiSwitch({ on, onChange }: { on: boolean; onChange: (v: boolean) => voi
   );
 }
 
-function Bubble({ m }: { m: Message }) {
+/** The agent as a character: her initial in a small badge. */
+function AgentAvatar({ name, size = 16 }: { name: string; size?: number }) {
+  return (
+    <span className="grid shrink-0 place-items-center rounded-full bg-ai font-bold text-white" style={{ width: size, height: size, fontSize: Math.round(size * 0.58) }} aria-hidden="true">
+      {name.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
+function Bubble({ m, agentName }: { m: Message; agentName: string }) {
   const out = m.direction === "outbound";
   const bg = !out ? "bg-bubble-in" : m.author === "ai" ? "bg-bubble-ai" : "bg-bubble-out";
   const time = new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -645,7 +678,7 @@ function Bubble({ m }: { m: Message }) {
       <div className={`max-w-[85%] rounded-2xl px-3 py-2 shadow-[0_1px_0.5px_rgba(0,0,0,0.08)] md:max-w-[65%] ${bg} ${out ? "rounded-tr-md" : "rounded-tl-md"}`}>
         {out && (
           <div className={`mb-0.5 flex items-center gap-1 text-[11px] font-semibold ${m.author === "ai" ? "text-ai" : "text-brand"}`}>
-            {m.author === "ai" ? <><Bot size={12} /> AI agent</> : <><User size={12} /> You</>}
+            {m.author === "ai" ? <><AgentAvatar name={agentName} size={16} /> {agentName}</> : <><User size={12} /> You</>}
           </div>
         )}
         {m.media.map((x, i) => <MediaView key={i} url={x.url} type={x.contentType} />)}
@@ -687,6 +720,7 @@ function LeadPanel({ conv, onClose, onSave, flash, onChanged }: {
   const [tag, setTag] = useState("");
   const [scoring, setScoring] = useState(false);
   const lead = conv.lead;
+  const agentName = useAgentName();
 
   const rescore = async () => {
     setScoring(true);
@@ -817,6 +851,106 @@ function LeadPanel({ conv, onClose, onSave, flash, onChanged }: {
         </dl>
       </div>
     </aside>
+  );
+}
+
+// One-tap tweaks for "add" mode.
+const INSTRUCTION_PRESETS = [
+  "Keep it short and formal.",
+  "Reply in Arabic.",
+  "Push gently for a call this week.",
+  "Don't discuss prices; say a teammate will send a quote.",
+  "They're a VIP: be extra warm and personal.",
+  "Don't follow up unless they reply.",
+];
+
+// Starting points for "replace" mode: a whole different job for this person.
+const BRIEF_TEMPLATES: { label: string; text: string }[] = [
+  {
+    label: "DevMate client: pitch Sixty",
+    text: `This person is a DevMate Solutions lead, not an AI Founder Hub student. Introduce yourself as Freya from DevMate Solutions.
+Your goal: show them how Sixty can help their business, then book a free demo.
+About Sixty (sixty.devmatesolutions.com): an AI sales agent for WhatsApp and phone that answers every lead in under 60 seconds, day or night. It replies like their best rep, qualifies the lead, books the next step (viewing, table, consultation) and updates their CRM. Official WhatsApp Business API, English, Arabic and 40+ languages, done-for-you setup, live in 7 days.
+Pricing: WhatsApp AI Agent from AED 549 a month (Starter), Growth AED 1,099, Scale AED 2,199; AI Call Agent is custom-quoted. Only quote these if they ask.
+First find out what business they run and how they handle leads today (who replies, how fast, after hours). Connect Sixty to that, then offer the free demo at https://sixty.devmatesolutions.com
+Do not mention AI Founder Hub, the masterclass or the AAA Accelerator.`,
+  },
+  {
+    label: "Existing member: support only",
+    text: `This person is already a customer. Do not sell or pitch anything.
+Help with their questions warmly and briefly. For anything about their account, payments, access or a complaint, say you'll pass it to the team right away and hand off.`,
+  },
+  {
+    label: "Partner / collaboration",
+    text: `This person is a potential partner or collaborator, not a customer. Do not pitch our programs.
+Be friendly and professional, learn what they have in mind (their company, the idea, timeline), then say a founder will follow up personally and hand off.`,
+  },
+];
+
+/** A custom brief for the agent, for this one person: added to the usual instructions, or replacing them. */
+function AgentInstructions({ conv, agentName, onSave }: { conv: Conv; agentName: string; onSave: (p: Partial<Conversation>) => Promise<void> }) {
+  const saved = conv.aiInstructions ?? "";
+  const savedMode = conv.aiInstructionsMode ?? "add";
+  const [text, setText] = useState(saved);
+  // New briefs default to "replace": a different job for this person is the usual reason to write one.
+  const [mode, setMode] = useState<"add" | "replace">(saved ? savedMode : "replace");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const dirty = text.trim() !== saved.trim() || (Boolean(text.trim()) && mode !== savedMode);
+  const who = displayName(conv).split(" ")[0];
+  const replace = mode === "replace";
+
+  const save = async (value = text) => {
+    setBusy(true);
+    await onSave({ aiInstructions: value.trim(), aiInstructionsMode: mode });
+    setBusy(false); setDone(true); setTimeout(() => setDone(false), 1800);
+  };
+
+  return (
+    <section className={`rounded-2xl border p-3.5 ${saved ? "border-ai/40 bg-ai-soft/60" : "border-line bg-panel-2/50"}`}>
+      <div className="mb-2.5 flex items-center gap-2">
+        <span className="grid h-6 w-6 place-items-center rounded-full bg-ai text-[11px] font-bold text-white">{agentName.slice(0, 1).toUpperCase()}</span>
+        <span className="text-xs font-semibold leading-tight">{agentName}&apos;s brief for {who}</span>
+        {saved && !dirty && <span className="ml-auto rounded-full bg-ai px-2 py-0.5 text-[10px] font-semibold text-white">{savedMode === "replace" ? "Own brief" : "Active"}</span>}
+      </div>
+
+      <div className="mb-2 grid grid-cols-2 gap-1 rounded-xl bg-panel p-1 text-[11.5px] font-medium">
+        {([["replace", "Own brief"], ["add", "Add to usual"]] as const).map(([m, label]) => (
+          <button key={m} type="button" onClick={() => setMode(m)}
+            className={`h-7 rounded-lg transition ${mode === m ? "bg-ai text-white shadow-sm" : "text-ink-2 hover:text-ink"}`}>{label}</button>
+        ))}
+      </div>
+      <p className="mb-2 text-[11px] leading-snug text-ink-3">
+        {replace
+          ? `${agentName} ignores the usual script for ${who} and works only from this brief: who she represents, what to offer and how to talk.`
+          : `${agentName} keeps her usual instructions and also follows this for ${who}.`}
+      </p>
+
+      <textarea className={`input bg-panel text-[13px] ${replace ? "min-h-[120px]" : "min-h-[72px]"}`} maxLength={2000} value={text} onChange={(e) => setText(e.target.value)}
+        placeholder={replace
+          ? `e.g. "${who} is a DevMate Solutions client. Introduce yourself as Freya from DevMate and show how Sixty answers their leads in 60 seconds. Offer a free demo."`
+          : `e.g. "Keep replies under 2 lines and mention the early-bird discount."`} />
+
+      <div className="mt-2 flex flex-wrap gap-1">
+        {replace
+          ? BRIEF_TEMPLATES.map((t) => (
+              <button key={t.label} type="button" onClick={() => setText(t.text)}
+                className="rounded-full border border-line bg-panel px-2 py-0.5 text-[11px] text-ink-2 hover:border-ai hover:text-ai">Use: {t.label}</button>
+            ))
+          : INSTRUCTION_PRESETS.filter((p) => !text.includes(p)).slice(0, 4).map((p) => (
+              <button key={p} type="button" onClick={() => setText((t) => (t.trim() ? `${t.trim()}\n${p}` : p))}
+                className="rounded-full border border-line bg-panel px-2 py-0.5 text-[11px] text-ink-2 hover:border-ai hover:text-ai">+ {p}</button>
+            ))}
+      </div>
+
+      <div className="mt-2.5 flex items-center gap-2">
+        <span className="text-[11px] leading-tight text-ink-3">{conv.aiEnabled ? `Used from ${agentName}'s next reply, and in ✨ drafts.` : `${agentName} is off for this chat; used in ✨ drafts and when you hand back.`}</span>
+        {saved && <button type="button" disabled={busy} onClick={() => { setText(""); void save(""); }} className="ml-auto text-[11px] text-ink-3 hover:text-danger">Clear</button>}
+        <button type="button" disabled={busy || !dirty} onClick={() => save()} className={`btn h-7 px-3 text-xs ${saved ? "" : "ml-auto"} ${dirty ? "btn-primary" : ""}`}>
+          {busy ? <Loader2 size={12} className="animate-spin" /> : done ? <Check size={12} /> : null}{done ? "Saved" : "Save"}
+        </button>
+      </div>
+    </section>
   );
 }
 
