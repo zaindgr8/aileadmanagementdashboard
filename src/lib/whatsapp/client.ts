@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef } from "react";
-import type { LeadStage } from "./types";
+import type { Conversation, LeadStage, Priority } from "./types";
 
 export async function api<T>(url: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const res = await fetch(url, {
@@ -109,4 +109,43 @@ export const STAGE_META: Record<LeadStage, { label: string; dot: string; chip: s
 /** Text colour for a 0–100 lead score. */
 export function scoreTone(score: number) {
   return score >= 70 ? "text-brand" : score >= 40 ? "text-warn" : "text-ink-3";
+}
+
+export const PRIORITY_META: Record<Priority, { label: string; chip: string; hint: string }> = {
+  P1: { label: "P1", chip: "bg-danger text-white", hint: "Act now" },
+  P2: { label: "P2", chip: "bg-warn-soft text-warn", hint: "Qualified — follow up today" },
+  P3: { label: "P3", chip: "bg-panel-2 text-ink-2", hint: "Early stage — nurture" },
+  P4: { label: "P4", chip: "bg-panel-2 text-ink-3", hint: "Not a sales lead" },
+};
+
+type RankInput = Pick<Conversation, "status" | "unread" | "needsHuman" | "lastInboundAt" | "lastMessageAt" | "lead">;
+
+/** When the customer is waiting for our reply (their message is the latest), since when. */
+export function waitingSince(c: Pick<Conversation, "status" | "lastInboundAt" | "lastMessageAt">): string | null {
+  if (c.status !== "open" || !c.lastInboundAt) return null;
+  return c.lastInboundAt >= c.lastMessageAt ? c.lastInboundAt : null;
+}
+
+/**
+ * Who to talk to first: the AI score, boosted by urgency, priority, a waiting customer,
+ * unread messages and handoffs; resolved chats sink to the bottom.
+ */
+export function priorityRank(c: RankInput, now = Date.now()): number {
+  if (c.status === "resolved") return -1000 + (c.lead?.score ?? 0);
+  const l = c.lead;
+  let r = l?.score ?? 20;
+  r += { P1: 40, P2: 15, P3: 0, P4: -40 }[l?.priority ?? "P3"];
+  r += { high: 15, medium: 5, low: 0 }[l?.urgency ?? "low"];
+  if (c.needsHuman) r += 25;
+  r += Math.min(3, c.unread) * 4;
+  const w = waitingSince(c);
+  if (w) r += Math.min(20, (now - new Date(w).getTime()) / 60_000 / 6); // up to +20 after 2h of waiting
+  return r;
+}
+
+/** "Waiting 2h" pill tone: fine, getting late, overdue. */
+export function waitTone(sinceIso: string, priority?: Priority) {
+  const mins = (Date.now() - new Date(sinceIso).getTime()) / 60_000;
+  const target = priority === "P1" ? 15 : priority === "P2" ? 60 : 240;
+  return mins >= target ? "bg-danger-soft text-danger" : mins >= target / 2 ? "bg-warn-soft text-warn" : "bg-panel-2 text-ink-2";
 }

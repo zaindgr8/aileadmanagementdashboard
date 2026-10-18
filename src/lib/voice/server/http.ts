@@ -1,6 +1,7 @@
 import { unstable_rethrow } from 'next/navigation';
 import { NextResponse, type NextRequest } from 'next/server';
 import { readSession, SESSION_COOKIE } from '@/lib/auth/session';
+import { WorkspaceError } from '@/lib/tenant/context';
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -36,7 +37,7 @@ export function route<C = unknown>(handler: Handler<C>, { auth = true } = {}): H
       return await handler(req, ctx);
     } catch (err) {
       unstable_rethrow(err); // let Next's own control-flow errors (e.g. prerender bailout) through
-      const status = err instanceof HttpError ? err.status : 500;
+      const status = err instanceof HttpError || err instanceof WorkspaceError ? err.status : 500;
       if (status === 500) console.error(err);
       return json({ error: status === 500 ? 'Something went wrong' : (err as Error).message }, { status });
     }

@@ -1,10 +1,10 @@
 import 'server-only';
-import { createHmac, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { q, sb, supabaseConfigured } from '@/lib/supabase';
 import { MODULES, type ModuleKey, type Role, type SessionUser } from './modules';
 
-// Users live in Supabase (`app_users`, see supabase/schema.sql). Each has a role and the list of
-// modules they may open, so adding teammates later is just inserting rows.
+// Users live in Supabase (`app_users`, see supabase/platform.sql). Each belongs to one workspace
+// (client account), has a role there and the list of modules they may open.
 interface UserRow {
   username: string;
   display_name: string;
@@ -12,6 +12,17 @@ interface UserRow {
   role: Role;
   modules: string[];
   active: boolean;
+  platform_admin: boolean;
+  workspace_id: string;
+  workspace: { id: string; name: string; status: string; modules: string[] } | null;
+}
+
+/** Same format scripts/hash-password.mjs produces. */
+export function hashPassword(password: string) {
+  const N = 16384, r = 8, p = 1;
+  const salt = randomBytes(16);
+  const hash = scryptSync(password, salt, 64, { N, r, p });
+  return `scrypt$${N}$${r}$${p}$${salt.toString('base64url')}$${hash.toString('base64url')}`;
 }
 
 /** Checks a "scrypt$N$r$p$salt$hash" string (see scripts/hash-password.mjs). */
@@ -23,12 +34,33 @@ export function verifyPassword(password: string, stored: string) {
   return timingSafeEqual(actual, expected);
 }
 
-const toUser = (r: UserRow): SessionUser => ({
-  username: r.username,
-  name: r.display_name || r.username,
-  role: r.role,
-  modules: r.modules.filter((m): m is ModuleKey => (MODULES as readonly string[]).includes(m)),
-});
+const onlyModules = (list: string[]) => list.filter((m): m is ModuleKey => (MODULES as readonly string[]).includes(m));
+
+/** What a user can open: their own modules, limited to what their workspace has. */
+export function sessionUserFor(
+  u: { username: string; display_name: string; role: Role; modules: string[]; platform_admin: boolean },
+  ws: { id: string; name: string; modules: string[] },
+): SessionUser {
+  const wsModules = onlyModules(ws.modules);
+  return {
+    username: u.username,
+    name: u.display_name || u.username,
+    role: u.role,
+    modules: onlyModules(u.modules).filter((m) => wsModules.includes(m)),
+    workspace: ws.id,
+    workspaceName: ws.name,
+    platformAdmin: u.platform_admin,
+  };
+}
+
+/** Usernames are unique across all workspaces (they're how people sign in). */
+export async function usernameTaken(username: string) {
+  return (await sb<{ username: string }[]>(`app_users?username=eq.${q(username)}&select=username`)).length > 0;
+}
+
+export async function emailTaken(email: string) {
+  return (await sb<{ username: string }[]>(`app_users?email=eq.${q(email.toLowerCase())}&select=username`)).length > 0;
+}
 
 // Constant-time compare for the bootstrap fallback.
 function same(a: string, b: string) {
@@ -36,19 +68,29 @@ function same(a: string, b: string) {
   return timingSafeEqual(createHmac('sha256', k).update(a).digest(), createHmac('sha256', k).update(b).digest());
 }
 
-/** The user for these credentials, or null. */
-export async function authenticate(username: string, password: string): Promise<SessionUser | null> {
-  const name = username.trim().toLowerCase();
-  if (!name || !password) return null;
+const SELECT = 'username,display_name,password_hash,role,modules,active,platform_admin,workspace_id,workspace:workspaces(id,name,status,modules)';
+
+export type AuthResult = { user: SessionUser } | { error: string; status: number };
+
+/** Sign in with a username or email. Explains why when the account exists but can't sign in yet. */
+export async function authenticate(login: string, password: string): Promise<AuthResult> {
+  const name = login.trim().toLowerCase();
+  const wrong = { error: 'Incorrect username or password', status: 401 };
+  if (!name || !password) return wrong;
 
   if (supabaseConfigured) {
     try {
-      const rows = await sb<UserRow[]>(`app_users?username=eq.${q(name)}&select=username,display_name,password_hash,role,modules,active`);
-      const row = rows[0];
-      if (!row) return null;
-      if (!row.active || !verifyPassword(password, row.password_hash)) return null;
-      void sb(`app_users?username=eq.${q(name)}`, { method: 'PATCH', body: { last_login_at: new Date().toISOString() } }).catch(() => {});
-      return toUser(row);
+      const filter = name.includes('@') ? `email=eq.${q(name)}` : `username=eq.${q(name)}`;
+      const rows = await sb<UserRow[]>(`app_users?${filter}&select=${SELECT}&limit=2`);
+      const row = rows.length === 1 ? rows[0] : undefined;
+      if (!row || !verifyPassword(password, row.password_hash)) return wrong;
+      if (!row.active) return { error: 'Your account has been deactivated. Ask your workspace owner.', status: 403 };
+      const ws = row.workspace;
+      if (!ws) return { error: 'Your account is not linked to a workspace yet.', status: 403 };
+      if (!row.platform_admin && ws.status === 'pending') return { error: `${ws.name} is waiting for approval. We'll email you as soon as it's live.`, status: 403 };
+      if (!row.platform_admin && ws.status === 'suspended') return { error: `${ws.name} is suspended. Contact support to restore access.`, status: 403 };
+      void sb(`app_users?username=eq.${q(row.username)}`, { method: 'PATCH', body: { last_login_at: new Date().toISOString() } }).catch(() => {});
+      return { user: sessionUserFor(row, ws) };
     } catch (err) {
       // Table missing or Supabase down: only then fall through to the bootstrap login.
       console.error('[auth]', err instanceof Error ? err.message : err);
@@ -58,9 +100,9 @@ export async function authenticate(username: string, password: string): Promise<
   const bu = (process.env.BOOTSTRAP_USERNAME || '').trim().toLowerCase();
   const bp = process.env.BOOTSTRAP_PASSWORD || '';
   if (bu && bp && same(name, bu) && same(password, bp)) {
-    return { username: bu, name: bu, role: 'owner', modules: [...MODULES] };
+    return { user: { username: bu, name: bu, role: 'owner', modules: [...MODULES], workspace: 'default', workspaceName: 'Default', platformAdmin: true } };
   }
-  return null;
+  return wrong;
 }
 
 // Simple per-IP brake on password guessing (per server instance).

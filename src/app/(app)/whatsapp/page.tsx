@@ -1,12 +1,13 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDownWideNarrow, ArrowLeft, Bot, Building2, Check, CheckCheck, CheckCircle2, Clock, FileText, Hand, Loader2,
-  Mail, PanelRight, RefreshCw, Search, Send, Sparkles, Target, TriangleAlert, User, Wallet, X,
+  ArrowDownWideNarrow, ArrowLeft, Bot, Building2, Check, CheckCheck, CheckCircle2, ChevronDown, Clock, FileText, Globe, Hand, Loader2,
+  Mail, MinusCircle, PanelRight, PlusCircle, RefreshCw, Search, Send, Smile, Sparkles, StickyNote, Target, Timer, TriangleAlert, User, UserPlus, Wallet, X,
 } from "lucide-react";
-import { api, displayName, STAGE_META, timeAgo, useLive } from "@/lib/whatsapp/client";
-import { LEAD_STAGES, type Conversation, type Lead, type Message } from "@/lib/whatsapp/types";
-import { Avatar, ScoreRing, StageChip } from "@/components/whatsapp/ui";
+import { api, displayName, priorityRank, STAGE_META, timeAgo, useLive, waitingSince, waitTone } from "@/lib/whatsapp/client";
+import { LEAD_STAGES, type Agent, type Conversation, type Lead, type Message, type Note } from "@/lib/whatsapp/types";
+import type { SessionUser } from "@/lib/auth/modules";
+import { Avatar, PriorityBadge, ScoreRing, StageChip } from "@/components/whatsapp/ui";
 
 type Conv = Conversation & { sessionOpen: boolean };
 type Template = { sid: string; name: string; language: string; status: string; variables: Record<string, string> };
@@ -14,6 +15,7 @@ type Template = { sid: string; name: string; language: string; status: string; v
 const FILTERS = [
   { key: "all", label: "All" },
   { key: "unread", label: "Unread" },
+  { key: "waiting", label: "Waiting" },
   { key: "hot", label: "Hot" },
   { key: "human", label: "Needs human" },
   { key: "ai", label: "AI" },
@@ -21,6 +23,8 @@ const FILTERS = [
   { key: "resolved", label: "Resolved" },
 ] as const;
 type FilterKey = (typeof FILTERS)[number]["key"];
+type View = "all" | "mine" | "unassigned";
+type Scoring = { gemini: boolean; model: string | null; running: boolean; total: number; done: number; failed: number; lastError?: string };
 
 const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName));
 
@@ -35,20 +39,36 @@ export default function Inbox() {
   const [convs, setConvs] = useState<Conv[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
-  const [sort, setSort] = useState<"recent" | "score">("recent");
+  const [sort, setSort] = useState<"recent" | "priority">("recent");
+  const [view, setView] = useState<View>("all");
+  const [me, setMe] = useState<SessionUser | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [scoring, setScoring] = useState<Scoring | null>(null);
+  // Ticks every minute so "waiting" timers and the priority order stay current.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(t); }, []);
   const [query, setQuery] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [toast, setToast] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
   const loadList = useCallback(() => api<Conv[]>("/api/whatsapp/conversations").then(setConvs).catch(() => {}), []);
+  const loadAgents = useCallback(() => api<Agent[]>("/api/whatsapp/team").then(setAgents).catch(() => {}), []);
+  const loadScoring = useCallback(() => api<Scoring>("/api/whatsapp/scoring").then(setScoring).catch(() => {}), []);
   useEffect(() => {
     loadList();
+    loadAgents();
+    loadScoring();
+    api<SessionUser>("/api/me").then((u) => {
+      setMe(u);
+      // Agents land on their own chats; owners/admins on everything (unless they chose otherwise).
+      setView(readPref<View>("inbox.view", u.role === "member" ? "mine" : "all"));
+    }).catch(() => {});
     // eslint-disable-next-line react-hooks/set-state-in-effect -- restore saved preferences after hydration
-    setSort(readPref("inbox.sort", "recent"));
+    setSort(readPref<string>("inbox.sort", "recent") === "recent" ? "recent" : "priority");
     const c = new URLSearchParams(window.location.search).get("c");
     if (c) setSelected(c);
-  }, [loadList]);
+  }, [loadList, loadAgents, loadScoring]);
 
   const select = useCallback((id: string | null) => {
     setSelected(id);
@@ -64,7 +84,16 @@ export default function Inbox() {
     return () => window.removeEventListener("open-chat", on);
   }, [select]);
 
-  useLive((e) => { if (e.type !== "hello" && e.type !== "agent") loadList(); });
+  useLive((e) => {
+    if (e.type === "team") loadAgents();
+    if (e.type !== "hello" && e.type !== "agent" && e.type !== "note") loadList();
+  });
+  // While Gemini (re-)scores chats in the background, show progress and refresh the list.
+  useEffect(() => {
+    if (!scoring?.running) return;
+    const t = setInterval(() => { loadScoring(); loadList(); }, 4000);
+    return () => clearInterval(t);
+  }, [scoring?.running, loadScoring, loadList]);
 
   const flash = useCallback((msg: string) => { setToast(msg); setTimeout(() => setToast(""), 3500); }, []);
 
@@ -79,19 +108,34 @@ export default function Inbox() {
   };
 
   const list = useMemo(() => convs ?? [], [convs]);
-  const counts = useMemo(() => ({
-    unread: list.filter((c) => c.unread > 0).length,
-    hot: list.filter((c) => c.lead?.stage === "hot").length,
-    human: list.filter((c) => c.needsHuman).length,
-  }), [list]);
+  const isHot = (c: Conv) => c.status === "open" && (c.lead?.stage === "hot" || c.lead?.priority === "P1");
+  // "Unassigned" is a to-do list: open chats where the customer has written and nobody owns them yet
+  // (outreach nobody has replied to doesn't need an owner).
+  const needsOwner = (c: Conv) => !c.assignee && c.status === "open" && Boolean(c.lastInboundAt);
+  const inView = useCallback((c: Conv) => view === "all" || (view === "mine" ? c.assignee === me?.username : needsOwner(c)), [view, me]);
+  const counts = useMemo(() => {
+    const v = list.filter(inView);
+    return {
+      unread: v.filter((c) => c.unread > 0).length,
+      waiting: v.filter((c) => waitingSince(c)).length,
+      hot: v.filter(isHot).length,
+      human: v.filter((c) => c.needsHuman).length,
+      open: list.filter((c) => c.status === "open").length,
+      mine: list.filter((c) => c.assignee === me?.username && c.status === "open").length,
+      unassigned: list.filter(needsOwner).length,
+    };
+  }, [list, inView, me]);
+  const agentName = useMemo(() => new Map(agents.map((a) => [a.username, a.name])), [agents]);
 
   const visible = useMemo(() => {
     const q = query.toLowerCase().trim();
     const out = list.filter((c) => {
-      if (q && !`${displayName(c)} ${c.phone} ${c.lastMessagePreview} ${c.lead?.company ?? ""} ${c.lead?.intent ?? ""} ${c.tags.join(" ")}`.toLowerCase().includes(q)) return false;
+      if (!inView(c)) return false;
+      if (q && !`${displayName(c)} ${c.phone} ${c.lastMessagePreview} ${c.lead?.company ?? ""} ${c.lead?.intent ?? ""} ${c.lead?.summary ?? ""} ${c.tags.join(" ")} ${(c.lead?.aiTags ?? []).join(" ")}`.toLowerCase().includes(q)) return false;
       switch (filter) {
         case "unread": return c.unread > 0;
-        case "hot": return c.lead?.stage === "hot";
+        case "waiting": return Boolean(waitingSince(c));
+        case "hot": return isHot(c);
         case "human": return c.needsHuman;
         case "ai": return c.aiEnabled && c.status === "open";
         case "manual": return !c.aiEnabled && c.status === "open";
@@ -99,9 +143,9 @@ export default function Inbox() {
         default: return true;
       }
     });
-    if (sort === "score") out.sort((a, b) => (b.lead?.score ?? -1) - (a.lead?.score ?? -1));
+    if (sort === "priority") out.sort((a, b) => priorityRank(b, now) - priorityRank(a, now));
     return out;
-  }, [list, filter, query, sort]);
+  }, [list, filter, query, sort, inView, now]);
 
   const current = list.find((c) => c.id === selected) ?? null;
 
@@ -125,7 +169,8 @@ export default function Inbox() {
     return () => window.removeEventListener("keydown", onKey);
   }, [visible, selected, select]);
 
-  const toggleSort = () => { const s = sort === "recent" ? "score" : "recent"; setSort(s); writePref("inbox.sort", s); };
+  const toggleSort = () => { const s = sort === "recent" ? "priority" : "recent"; setSort(s); writePref("inbox.sort", s); };
+  const chooseView = (v: View) => { setView(v); writePref("inbox.view", v); };
 
   return (
     <div className="flex h-full">
@@ -135,12 +180,32 @@ export default function Inbox() {
           <h1 className="text-lg font-semibold tracking-tight">Inbox</h1>
           {convs && <span className="text-xs tabular-nums text-ink-3">{visible.length}</span>}
           <button onClick={toggleSort} className="btn btn-ghost ml-auto px-2 py-1.5 text-xs" title="Change sort order">
-            <ArrowDownWideNarrow size={14} /> {sort === "recent" ? "Recent" : "Top score"}
+            <ArrowDownWideNarrow size={14} /> {sort === "recent" ? "Recent" : "Priority"}
           </button>
           <button onClick={sync} disabled={syncing} className="btn btn-ghost px-2 py-1.5 text-xs" title="Import past messages from Twilio">
             <RefreshCw size={14} className={syncing ? "animate-spin" : ""} /> Sync
           </button>
         </div>
+        <div className="px-4 pb-2">
+          <div className="grid grid-cols-3 gap-1 rounded-xl bg-panel-2 p-1 text-xs font-medium" role="tablist">
+            {([["all", "All", counts.open], ["mine", "Mine", counts.mine], ["unassigned", "Unassigned", counts.unassigned]] as const).map(([k, label, n]) => (
+              <button key={k} role="tab" aria-selected={view === k} onClick={() => chooseView(k)}
+                className={`flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-2 transition ${view === k ? "bg-panel text-ink shadow-sm ring-1 ring-line" : "text-ink-3 hover:text-ink"}`}>
+                <span className="truncate">{label}</span>
+                <span className={`inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums leading-none ${view === k ? "bg-brand-soft text-brand" : "bg-panel/70 text-ink-3"}`}>{n}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        {scoring?.running && (
+          <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl bg-ai-soft px-3 py-2 text-xs text-ai">
+            <Sparkles size={14} className="shrink-0 animate-pulse" />
+            <span className="min-w-0 flex-1">Gemini is scoring your chats… <b className="tabular-nums">{scoring.done}/{scoring.total}</b></span>
+          </div>
+        )}
+        {scoring && !scoring.running && scoring.failed > 0 && scoring.failed === scoring.done && (
+          <div className="mx-4 mb-2 rounded-xl bg-danger-soft px-3 py-2 text-xs text-danger" title={scoring.lastError}>Gemini scoring failed: {scoring.lastError}</div>
+        )}
         <div className="px-4 pb-2">
           <label className="relative block">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3" />
@@ -150,11 +215,11 @@ export default function Inbox() {
         </div>
         <div className="scroll-thin flex gap-1.5 overflow-x-auto px-4 pb-3">
           {FILTERS.map((f) => {
-            const n = f.key === "unread" ? counts.unread : f.key === "human" ? counts.human : f.key === "hot" ? counts.hot : 0;
+            const n = f.key === "unread" ? counts.unread : f.key === "human" ? counts.human : f.key === "hot" ? counts.hot : f.key === "waiting" ? counts.waiting : 0;
             return (
               <button key={f.key} onClick={() => setFilter(f.key)}
                 className={`flex shrink-0 items-center rounded-full px-3 py-1 text-xs font-medium transition ${filter === f.key ? "bg-ink text-panel" : "bg-panel-2 text-ink-2 hover:text-ink"}`}>
-                {f.label}{n > 0 && <span className={`ml-1.5 rounded-full px-1.5 text-[10px] font-semibold tabular-nums ${f.key === "human" ? "bg-warn text-panel" : "bg-brand text-brand-ink"}`}>{n}</span>}
+                {f.label}{n > 0 && <span className={`ml-1.5 rounded-full px-1.5 text-[10px] font-semibold tabular-nums ${f.key === "human" || f.key === "waiting" ? "bg-warn text-panel" : "bg-brand text-brand-ink"}`}>{n}</span>}
               </button>
             );
           })}
@@ -166,7 +231,7 @@ export default function Inbox() {
               <span className="flex-1 space-y-2 pt-1"><span className="skeleton block h-3 w-2/3" /><span className="skeleton block h-3 w-full" /></span>
             </li>
           ))}
-          {visible.map((c) => (
+          {visible.map((c) => { const w = waitingSince(c); const owner = c.assignee ? agentName.get(c.assignee) ?? c.assignee : ""; return (
             <li key={c.id}>
               <button onClick={() => select(c.id)} data-conv={c.id}
                 className={`relative flex w-full gap-3 px-4 py-3 text-left transition ${selected === c.id ? "bg-brand-soft/70" : "hover:bg-panel-2"}`}>
@@ -180,11 +245,18 @@ export default function Inbox() {
                     <span className={`truncate text-sm ${c.unread ? "font-semibold" : "font-medium"}`}>{displayName(c)}</span>
                     <span className={`shrink-0 text-[11px] tabular-nums ${c.unread ? "font-medium text-brand" : "text-ink-3"}`}>{timeAgo(c.lastMessageAt)}</span>
                   </div>
-                  {c.lead?.intent && <div className="truncate text-[11.5px] font-medium text-ink-2">{c.lead.intent}{c.lead.company ? ` · ${c.lead.company}` : ""}</div>}
+                  {(c.lead?.intent || c.lead?.priority) && (
+                    <div className="flex items-center gap-1.5 text-[11.5px] font-medium text-ink-2">
+                      {c.lead?.priority && <PriorityBadge priority={c.lead.priority} />}
+                      <span className="truncate">{c.lead?.intent}{c.lead?.company ? ` · ${c.lead.company}` : ""}</span>
+                    </div>
+                  )}
                   <div className="mt-0.5 flex items-center gap-2">
                     <span className="truncate text-[13px] text-ink-3">{c.lastMessagePreview || "No messages"}</span>
                     <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                      {w && <span title={`Waiting for a reply since ${new Date(w).toLocaleString()}`} className={`flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold tabular-nums ${waitTone(w, c.lead?.priority)}`}><Timer size={10} />{timeAgo(w)}</span>}
                       {c.needsHuman && <span title="Needs a human" className="rounded bg-warn-soft px-1.5 py-0.5 text-[10px] font-semibold text-warn">HUMAN</span>}
+                      {owner && <span title={`Assigned to ${owner}`}><Avatar name={owner} size={18} /></span>}
                       {c.aiEnabled ? <Bot size={14} className="text-ai" aria-label="AI on" /> : <User size={14} className="text-ink-3" aria-label="Manual" />}
                       {c.lead && <ScoreRing score={c.lead.score} size={22} />}
                       {c.unread > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-brand px-1 text-[11px] font-semibold text-brand-ink">{c.unread}</span>}
@@ -193,10 +265,11 @@ export default function Inbox() {
                 </div>
               </button>
             </li>
-          ))}
+          ); })}
           {convs && !visible.length && (
             <li className="px-6 py-16 text-center text-sm text-ink-3">
-              {list.length ? "No chats match this filter." : "No chats yet. When someone messages your WhatsApp number, it appears here — or click Sync to import history."}
+              {!list.length ? "No chats yet. When someone messages your WhatsApp number, it appears here — or click Sync to import history."
+                : view === "mine" ? "Nothing assigned to you right now." : view === "unassigned" ? "Every open chat has an owner. 🎉" : "No chats match this filter."}
             </li>
           )}
         </ul>
@@ -209,7 +282,7 @@ export default function Inbox() {
 
       {/* Thread */}
       {current ? (
-        <Thread key={current.id} conv={current} onBack={() => select(null)} onChanged={loadList} flash={flash}
+        <Thread key={current.id} conv={current} agents={agents} me={me} onBack={() => select(null)} onChanged={loadList} flash={flash}
           setLocal={(p) => setConvs((cs) => cs?.map((c) => (c.id === current.id ? { ...c, ...p } : c)) ?? cs)} />
       ) : (
         <div className="chat-wallpaper hidden flex-1 place-items-center md:grid">
@@ -217,11 +290,18 @@ export default function Inbox() {
             <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-panel text-brand shadow-[var(--shadow)]"><Target size={28} /></div>
             <p className="font-semibold">Pick a lead to start</p>
             <p className="mx-auto mt-1 max-w-xs text-sm text-ink-2">Watch the AI qualify leads live, take over any chat, or hand it back.</p>
-            {counts.hot > 0 && (
-              <button onClick={() => setFilter("hot")} className="btn mt-4 text-xs">
-                <span className="h-2 w-2 rounded-full bg-brand" /> {counts.hot} hot {counts.hot === 1 ? "lead" : "leads"} waiting
-              </button>
-            )}
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              {counts.hot > 0 && (
+                <button onClick={() => { setFilter("hot"); setSort("priority"); }} className="btn text-xs">
+                  <span className="h-2 w-2 rounded-full bg-brand" /> {counts.hot} hot {counts.hot === 1 ? "lead" : "leads"}
+                </button>
+              )}
+              {counts.waiting > 0 && (
+                <button onClick={() => { setFilter("waiting"); setSort("priority"); }} className="btn text-xs">
+                  <Timer size={13} className="text-warn" /> {counts.waiting} waiting for a reply
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -231,10 +311,12 @@ export default function Inbox() {
   );
 }
 
-function Thread({ conv, onBack, onChanged, flash, setLocal }: {
-  conv: Conv; onBack: () => void; onChanged: () => void; flash: (m: string) => void; setLocal: (p: Partial<Conv>) => void;
+function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
+  conv: Conv; agents: Agent[]; me: SessionUser | null; onBack: () => void; onChanged: () => void; flash: (m: string) => void; setLocal: (p: Partial<Conv>) => void;
 }) {
   const [messages, setMessages] = useState<Message[] | null>(null);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [mode, setMode] = useState<"reply" | "note">("reply");
   const [draft, setDraft] = useState("");
   const [drafting, setDrafting] = useState(false);
   const [showLead, setShowLead] = useState(false);
@@ -252,6 +334,9 @@ function Thread({ conv, onBack, onChanged, flash, setLocal }: {
       .then((r) => setMessages([...r.messages, ...pendingRef.current]))
       .catch(() => {});
   }, [conv.id]);
+  const loadNotes = useCallback(() => {
+    api<Note[]>(`/api/whatsapp/conversations/${encodeURIComponent(conv.id)}/notes`).then(setNotes).catch(() => {});
+  }, [conv.id]);
 
   const patch = useCallback(async (p: Partial<Conversation>) => {
     setLocal(p as Partial<Conv>); // optimistic
@@ -261,12 +346,15 @@ function Thread({ conv, onBack, onChanged, flash, setLocal }: {
 
   useEffect(() => {
     load();
+    loadNotes();
     if (conv.unread) patch({ unread: 0 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conv.id]);
 
   useLive((e) => {
+    if (e.type === "note" && e.conversationId === conv.id) { loadNotes(); return; }
     if (e.conversationId === conv.id || e.type === "poll") {
+      if (e.type === "conversation") loadNotes(); // assignment events
       if (e.type === "conversation" || e.type === "agent") return; // the list reload already covers these
       load();
       if (e.type === "message" && document.visibilityState === "visible")
@@ -281,14 +369,26 @@ function Thread({ conv, onBack, onChanged, flash, setLocal }: {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target) || document.querySelector("[data-modal]")) return;
       if (e.key === "e") patch({ status: conv.status === "open" ? "resolved" : "open" });
-      else if (e.key === "r") { e.preventDefault(); inputRef.current?.focus(); }
+      else if (e.key === "r") { e.preventDefault(); setMode("reply"); inputRef.current?.focus(); }
+      else if (e.key === "n") { e.preventDefault(); setMode("note"); inputRef.current?.focus(); }
       else if (e.key === "i") toggleLead();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  const saveNote = async () => {
+    const body = draft.trim();
+    if (!body) return;
+    setDraft("");
+    try {
+      const n = await api<Note>(`/api/whatsapp/conversations/${encodeURIComponent(conv.id)}/notes`, { method: "POST", json: { body } });
+      setNotes((ns) => [...ns.filter((x) => x.id !== n.id), n]);
+    } catch (e) { flash((e as Error).message); setDraft(body); }
+  };
+
   const send = async (extra?: { contentSid: string }) => {
+    if (!extra && mode === "note") return saveNote();
     const body = draft.trim();
     if (!extra && !body) return;
     // Show the message immediately; it settles once Twilio accepts it.
@@ -326,7 +426,10 @@ function Thread({ conv, onBack, onChanged, flash, setLocal }: {
   };
 
   const name = displayName(conv);
-  const groups = groupByDay(messages ?? []);
+  const groups = groupByDay(messages ?? [], notes);
+  // @mention suggestions while writing a note.
+  const mentionQ = mode === "note" ? /(?:^|\s)@([a-z0-9._-]*)$/i.exec(draft)?.[1]?.toLowerCase() : undefined;
+  const mentionHits = mentionQ !== undefined ? agents.filter((a) => a.active && (a.username.includes(mentionQ) || a.name.toLowerCase().includes(mentionQ))).slice(0, 5) : [];
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -344,6 +447,7 @@ function Thread({ conv, onBack, onChanged, flash, setLocal }: {
             </span>
           </button>
           <div className="ml-auto flex items-center gap-1.5">
+            <AssignMenu conv={conv} agents={agents} me={me} onAssign={(username) => patch({ assignee: username } as unknown as Partial<Conversation>)} />
             <AiSwitch on={conv.aiEnabled} onChange={(v) => patch({ aiEnabled: v, ...(v ? { needsHuman: false } : {}) })} />
             <button onClick={() => patch({ status: conv.status === "open" ? "resolved" : "open" })}
               className="btn hidden px-2.5 py-1.5 text-xs sm:inline-flex" title={`${conv.status === "open" ? "Mark resolved" : "Reopen"}  (E)`}>
@@ -372,8 +476,8 @@ function Thread({ conv, onBack, onChanged, flash, setLocal }: {
           )}
           {groups.map(([day, items]) => (
             <div key={day}>
-              <div className="sticky top-0 z-10 my-3 text-center"><span className="rounded-lg bg-panel/90 px-3 py-1 text-[11px] font-medium text-ink-2 shadow-sm backdrop-blur">{day}</span></div>
-              {items.map((m) => <Bubble key={m.id} m={m} />)}
+              <div className="pointer-events-none sticky top-2 z-10 my-3 flex justify-center"><span className="rounded-full border border-line bg-panel px-3 py-1 text-[11px] font-medium text-ink-2 shadow-md">{day}</span></div>
+              {items.map((m) => ("kind" in m ? <NoteBubble key={m.id} n={m} /> : <Bubble key={m.id} m={m} />))}
             </div>
           ))}
           {messages && !messages.length && <p className="mt-20 text-center text-sm text-ink-3">No messages yet.</p>}
@@ -382,17 +486,36 @@ function Thread({ conv, onBack, onChanged, flash, setLocal }: {
 
         {/* Composer */}
         <footer className="border-t border-line bg-panel px-3 py-3 md:px-5">
-          {!conv.sessionOpen && conv.lastInboundAt ? (
+          <div className="mb-2 flex items-center gap-1 text-xs font-medium">
+            <button onClick={() => setMode("reply")} className={`rounded-lg px-2.5 py-1 transition ${mode === "reply" ? "bg-panel-2 text-ink" : "text-ink-3 hover:text-ink"}`}>Reply</button>
+            <button onClick={() => { setMode("note"); inputRef.current?.focus(); }} className={`flex items-center gap-1 rounded-lg px-2.5 py-1 transition ${mode === "note" ? "bg-warn-soft text-warn" : "text-ink-3 hover:text-ink"}`}>
+              <StickyNote size={13} /> Internal note
+            </button>
+            {mode === "note" && <span className="ml-2 text-[11px] font-normal text-ink-3">Only your team sees this. Type @ to mention someone.</span>}
+          </div>
+          {mode === "reply" && !conv.sessionOpen && conv.lastInboundAt ? (
             <div className="flex flex-wrap items-center gap-3 rounded-xl bg-panel-2 px-4 py-3 text-sm">
               <Clock size={16} className="text-warn" />
               <span className="flex-1 text-ink-2">The 24-hour WhatsApp window is closed. You can only send an approved template until the customer replies.</span>
               <button onClick={openTemplates} className="btn btn-primary py-1.5 text-xs"><FileText size={14} /> Send template</button>
             </div>
           ) : (
-            <div className="flex items-end gap-2">
-              <button onClick={aiDraft} disabled={drafting} className="btn h-10 shrink-0 px-2.5 text-ai" title="Draft a reply with AI (you review before sending)">
+            <div className="relative flex items-end gap-2">
+              {mentionHits.length > 0 && (
+                <ul className="card absolute bottom-12 left-12 z-20 w-56 overflow-hidden py-1 text-sm shadow-lg">
+                  {mentionHits.map((a) => (
+                    <li key={a.username}>
+                      <button className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-panel-2"
+                        onClick={() => { setDraft((d) => d.replace(/@([a-z0-9._-]*)$/i, `@${a.username} `)); inputRef.current?.focus(); }}>
+                        <Avatar name={a.name} size={20} /><span className="truncate">{a.name}</span><span className="ml-auto text-xs text-ink-3">@{a.username}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {mode === "reply" && <button onClick={aiDraft} disabled={drafting} className="btn h-10 shrink-0 px-2.5 text-ai" title="Draft a reply with AI (you review before sending)">
                 {drafting ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
-              </button>
+              </button>}
               <textarea
                 ref={inputRef}
                 value={draft}
@@ -402,17 +525,17 @@ function Thread({ conv, onBack, onChanged, flash, setLocal }: {
                   else if (e.key === "Escape") inputRef.current?.blur();
                 }}
                 rows={Math.min(5, Math.max(1, draft.split("\n").length))}
-                placeholder={conv.aiEnabled ? "Type to take over from the AI…" : "Type a message"}
-                className="input scroll-thin max-h-40 min-h-10 resize-none py-2.5"
+                placeholder={mode === "note" ? "Write an internal note…" : conv.aiEnabled ? "Type to take over from the AI…" : "Type a message"}
+                className={`input scroll-thin max-h-40 min-h-10 resize-none py-2.5 ${mode === "note" ? "border-warn/40 bg-warn-soft/40" : ""}`}
               />
-              <button onClick={() => send()} disabled={!draft.trim()} className="btn btn-primary h-10 w-10 shrink-0 p-0" aria-label="Send">
-                <Send size={17} />
+              <button onClick={() => send()} disabled={!draft.trim()} className={`btn h-10 w-10 shrink-0 p-0 ${mode === "note" ? "bg-warn text-white" : "btn-primary"}`} aria-label={mode === "note" ? "Save note" : "Send"}>
+                {mode === "note" ? <StickyNote size={17} /> : <Send size={17} />}
               </button>
             </div>
           )}
           <p className="mt-1.5 hidden text-[11px] text-ink-3 md:block">
             {conv.aiEnabled ? "AI is replying automatically. Sending a message yourself pauses it for this chat." : "AI is off for this chat — you're in control."}
-            <span className="ml-2 opacity-70"><span className="kbd">R</span> reply · <span className="kbd">E</span> resolve · <span className="kbd">I</span> lead</span>
+            <span className="ml-2 opacity-70"><span className="kbd">R</span> reply · <span className="kbd">N</span> note · <span className="kbd">E</span> resolve · <span className="kbd">I</span> lead</span>
           </p>
         </footer>
       </section>
@@ -441,6 +564,61 @@ function Thread({ conv, onBack, onChanged, flash, setLocal }: {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function AssignMenu({ conv, agents, me, onAssign }: { conv: Conv; agents: Agent[]; me: SessionUser | null; onAssign: (username: string | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const owner = agents.find((a) => a.username === conv.assignee);
+  const pick = (u: string | null) => { setOpen(false); if (u !== (conv.assignee ?? null)) onAssign(u); };
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)} className="btn px-2.5 py-1.5 text-xs" title="Who handles this chat">
+        {owner ? <Avatar name={owner.name} size={18} /> : <UserPlus size={14} />}
+        <span className="hidden max-w-24 truncate sm:inline">{owner ? owner.name : conv.assignee || "Assign"}</span>
+        <ChevronDown size={12} className="text-ink-3" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <ul className="card anim-pop absolute right-0 z-40 mt-1 w-64 overflow-hidden py-1 text-sm shadow-lg">
+            {me && conv.assignee !== me.username && agents.some((a) => a.username === me.username) && (
+              <li><button onClick={() => pick(me.username)} className="flex w-full items-center gap-2 px-3 py-2 text-left font-medium text-brand hover:bg-panel-2"><UserPlus size={15} /> Assign to me</button></li>
+            )}
+            {agents.filter((a) => a.active).map((a) => (
+              <li key={a.username}>
+                <button onClick={() => pick(a.username)} className={`flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-panel-2 ${a.username === conv.assignee ? "bg-brand-soft/60" : ""}`}>
+                  <span className="relative"><Avatar name={a.name} size={24} /><span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-panel ${a.available ? "bg-ok" : "bg-ink-3"}`} /></span>
+                  <span className="min-w-0 flex-1"><span className="block truncate">{a.name}</span><span className="block text-[11px] text-ink-3">{a.available ? "Available" : "Away"} · {a.open} open</span></span>
+                  {a.username === conv.assignee && <Check size={15} className="text-brand" />}
+                </button>
+              </li>
+            ))}
+            {conv.assignee && <li className="border-t border-line"><button onClick={() => pick(null)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-ink-2 hover:bg-panel-2"><X size={15} /> Unassign</button></li>}
+            {agents.length <= 1 && <li className="border-t border-line px-3 py-2 text-[11px] text-ink-3">Add teammates on the Team page.</li>}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+function NoteBubble({ n }: { n: Note }) {
+  const time = new Date(n.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (n.kind === "event") {
+    return <div className="my-2 text-center"><span className="rounded-full bg-panel/90 px-3 py-1 text-[11px] text-ink-3 shadow-sm">{n.body} · {time}</span></div>;
+  }
+  const parts = n.body.split(/(@[a-z0-9._-]+)/gi);
+  return (
+    <div className="anim-rise mb-1.5 flex justify-center">
+      <div className="w-full max-w-[85%] rounded-2xl border border-warn/30 bg-warn-soft px-3 py-2 md:max-w-[65%]">
+        <div className="mb-0.5 flex items-center gap-1 text-[11px] font-semibold text-warn"><StickyNote size={12} /> Note · {n.authorName}</div>
+        <p className="whitespace-pre-wrap break-words text-[14px] leading-snug">
+          {parts.map((p, i) => (p.startsWith("@") ? <b key={i} className="text-warn">{p}</b> : p))}
+        </p>
+        <div className="mt-0.5 text-right text-[10.5px] text-ink-3">{time}</div>
+      </div>
     </div>
   );
 }
@@ -533,8 +711,9 @@ function LeadPanel({ conv, onClose, onSave, flash, onChanged }: {
               <ScoreRing score={lead.score} size={64} />
               <div className="min-w-0">
                 <div className="truncate font-semibold">{lead.intent || "Lead"}</div>
-                <div className="text-xs text-ink-3">
-                  {lead.source === "ai" ? "Scored by AI" : "Scored by rules"} · {timeAgo(lead.analyzedAt)}
+                <div className="flex items-center gap-1.5 text-xs text-ink-3">
+                  {lead.priority && <PriorityBadge priority={lead.priority} />}
+                  {lead.source === "gemini" ? "Gemini" : lead.source === "ai" ? "Older AI" : "Rules"} · {timeAgo(lead.analyzedAt)}
                 </div>
                 <button onClick={rescore} disabled={scoring} className="mt-1 flex items-center gap-1 text-xs font-medium text-brand disabled:opacity-50">
                   {scoring ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />} Re-score
@@ -547,7 +726,8 @@ function LeadPanel({ conv, onClose, onSave, flash, onChanged }: {
               <div className="grid grid-cols-5 gap-1 rounded-xl bg-panel-2 p-1">
                 {LEAD_STAGES.map((s) => (
                   <button key={s} onClick={() => setStage(s)}
-                    className={`rounded-lg py-1.5 text-[11px] font-semibold transition ${lead.stage === s ? `${STAGE_META[s].chip} shadow-sm ring-1 ring-line` : "text-ink-3 hover:text-ink"}`}>
+                    className={`flex h-7 items-center justify-center gap-1 rounded-lg text-[11px] font-semibold transition ${lead.stage === s ? "bg-panel text-ink shadow-sm ring-1 ring-line" : "text-ink-3 hover:text-ink"}`}>
+                    {lead.stage === s && <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STAGE_META[s].dot}`} />}
                     {STAGE_META[s].label}
                   </button>
                 ))}
@@ -555,6 +735,35 @@ function LeadPanel({ conv, onClose, onSave, flash, onChanged }: {
             </div>
 
             {lead.summary && <p className="leading-relaxed text-ink-2">{lead.summary}</p>}
+
+            {(lead.urgency || lead.sentiment || lead.category || lead.language) && (
+              <div className="flex flex-wrap gap-1.5 text-[11px] font-medium">
+                {lead.category && <span className="rounded-full bg-panel-2 px-2 py-0.5 capitalize text-ink-2">{lead.category}</span>}
+                {lead.urgency && <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 capitalize ${lead.urgency === "high" ? "bg-danger-soft text-danger" : lead.urgency === "medium" ? "bg-warn-soft text-warn" : "bg-panel-2 text-ink-2"}`}><Timer size={11} />{lead.urgency} urgency</span>}
+                {lead.sentiment && <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 capitalize ${lead.sentiment === "negative" ? "bg-danger-soft text-danger" : lead.sentiment === "positive" ? "bg-ok-soft text-ok" : "bg-panel-2 text-ink-2"}`}><Smile size={11} />{lead.sentiment}</span>}
+                {lead.language && <span className="flex items-center gap-1 rounded-full bg-panel-2 px-2 py-0.5 text-ink-2"><Globe size={11} />{lead.language}</span>}
+              </div>
+            )}
+
+            {lead.reasons && lead.reasons.length > 0 && (
+              <div>
+                <div className="mb-1.5 text-xs font-medium text-ink-2">Why this score</div>
+                <ul className="space-y-1">
+                  {lead.reasons.map((r, i) => (
+                    <li key={i} className="flex items-start gap-1.5 text-[13px] leading-snug">
+                      {r.impact === "positive" ? <PlusCircle size={14} className="mt-px shrink-0 text-ok" /> : <MinusCircle size={14} className="mt-px shrink-0 text-danger" />}
+                      <span className="text-ink-2">{r.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {lead.aiTags && lead.aiTags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {lead.aiTags.map((t) => <span key={t} className="rounded-full bg-ai-soft px-2 py-0.5 text-[11px] font-medium text-ai">#{t}</span>)}
+              </div>
+            )}
 
             {lead.nextStep && (
               <div className="rounded-xl border border-brand/25 bg-brand-soft px-3 py-2.5">
@@ -597,8 +806,8 @@ function LeadPanel({ conv, onClose, onSave, flash, onChanged }: {
           <input className="input" value={tag} placeholder="Add tag + Enter" onChange={(e) => setTag(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && tag.trim()) { onSave({ tags: [...new Set([...conv.tags, tag.trim()])] }); setTag(""); } }} />
         </Field>
-        <Field label="Internal notes">
-          <textarea className="input min-h-24" value={notes} placeholder="Only your team sees this" onChange={(e) => setNotes(e.target.value)} onBlur={() => notes !== conv.notes && onSave({ notes })} />
+        <Field label="Pinned note">
+          <textarea className="input min-h-24" value={notes} placeholder="Key facts about this person (only your team sees this)" onChange={(e) => setNotes(e.target.value)} onBlur={() => notes !== conv.notes && onSave({ notes })} />
         </Field>
         <dl className="space-y-2 text-xs">
           <Row k="WhatsApp profile" v={conv.profileName || "—"} />
@@ -630,11 +839,12 @@ function Row({ k, v }: { k: string; v: string }) {
   return <div className="flex justify-between gap-3"><dt className="text-ink-3">{k}</dt><dd className="text-right font-medium">{v}</dd></div>;
 }
 
-function groupByDay(messages: Message[]): [string, Message[]][] {
-  const out = new Map<string, Message[]>();
+function groupByDay(messages: Message[], notes: Note[] = []): [string, (Message | Note)[]][] {
+  const out = new Map<string, (Message | Note)[]>();
   const today = new Date().toDateString();
   const yesterday = new Date(Date.now() - 86_400_000).toDateString();
-  for (const m of messages) {
+  const items = [...messages, ...notes].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const m of items) {
     const d = new Date(m.createdAt);
     const key = d.toDateString() === today ? "Today" : d.toDateString() === yesterday ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
     if (!out.has(key)) out.set(key, []);

@@ -1,6 +1,7 @@
 import 'server-only';
 import type { Batch } from '@/lib/voice/types';
 import { sb } from '@/lib/supabase';
+import { workspaceId, wsFilter } from '@/lib/tenant/context';
 
 // Retell has no "list batch calls" endpoint, so campaigns launched from the
 // dashboard are logged in Supabase (`call_campaigns`).
@@ -18,7 +19,7 @@ interface CampaignRow {
 }
 
 export async function readBatches(): Promise<Batch[]> {
-  const rows = await sb<CampaignRow[]>('call_campaigns?select=*&order=created_at.desc&limit=500');
+  const rows = await sb<CampaignRow[]>(`call_campaigns?${await wsFilter()}&select=*&order=created_at.desc&limit=500`);
   return rows.map((r) => ({
     batch_call_id: r.batch_call_id,
     name: r.name,
@@ -37,6 +38,7 @@ export async function saveBatch(b: Batch) {
   await sb('call_campaigns', {
     method: 'POST',
     body: {
+      workspace_id: await workspaceId(),
       batch_call_id: b.batch_call_id,
       name: b.name,
       from_number: b.from_number,

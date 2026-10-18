@@ -1,27 +1,27 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
-import { z } from 'zod';
+import 'server-only';
+import { geminiConfigured, GeminiError, geminiJson, type GeminiSchema } from '@/lib/ai/gemini';
 import { fmt, outcomeOf } from '@/lib/voice/calls';
 import { STAGE_KEYS } from '@/lib/voice/leads';
 import type { CallDetail, Lead, LeadBrief, LeadNote } from '@/lib/voice/types';
 import { HttpError } from './http';
 
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-5-5';
+/** AI briefs run on Gemini (GEMINI_API_KEY). */
+export const aiEnabled = () => geminiConfigured;
 
-export const aiEnabled = () => !!process.env.ANTHROPIC_API_KEY;
-
-let client: Anthropic | null = null;
-const anthropic = () => (client ??= new Anthropic());
-
-const BriefSchema = z.object({
-  summary: z.string().describe('2-4 sentences: who this lead is, what they want, and where things stand.'),
-  intent: z.enum(['high', 'medium', 'low', 'none']).describe('Buying intent shown in the conversations.'),
-  suggested_stage: z.enum(STAGE_KEYS),
-  next_action: z.string().describe('The single most useful next step for the sales rep, as an imperative sentence.'),
-  talking_points: z.array(z.string()).describe('Up to 4 specific points to raise on the next contact.'),
-  objections: z.array(z.string()).describe('Concerns or objections the lead raised, if any.'),
-  best_follow_up: z.string().describe('When and how to follow up, based on what the lead said and when they answered.'),
-});
+const BRIEF_SCHEMA: GeminiSchema = {
+  type: 'OBJECT',
+  properties: {
+    summary: { type: 'STRING', description: '2-4 sentences: who this lead is, what they want, and where things stand.' },
+    intent: { type: 'STRING', enum: ['high', 'medium', 'low', 'none'], description: 'Buying intent shown in the conversations.' },
+    suggested_stage: { type: 'STRING', enum: STAGE_KEYS },
+    next_action: { type: 'STRING', description: 'The single most useful next step for the sales rep, as an imperative sentence.' },
+    talking_points: { type: 'ARRAY', maxItems: 4, items: { type: 'STRING' }, description: 'Up to 4 specific points to raise on the next contact.' },
+    objections: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Concerns or objections the lead raised, if any.' },
+    best_follow_up: { type: 'STRING', description: 'When and how to follow up, based on what the lead said and when they answered.' },
+  },
+  required: ['summary', 'intent', 'suggested_stage', 'next_action', 'talking_points', 'objections', 'best_follow_up'],
+};
+type BriefOut = Omit<LeadBrief, 'at' | 'calls'>;
 
 const SYSTEM = `You are a sales assistant inside a CRM for a business that uses AI voice agents to call leads.
 You read a lead's call history (summaries and transcripts) and the rep's notes, then write a short, practical brief that helps a human close the deal.
@@ -46,29 +46,17 @@ function render(lead: Lead, notes: LeadNote[], calls: CallDetail[], totalCalls: 
 }
 
 export async function writeBrief(lead: Lead, notes: LeadNote[], calls: CallDetail[], totalCalls: number): Promise<LeadBrief> {
-  if (!aiEnabled()) throw new HttpError(503, 'AI briefs are off. Set ANTHROPIC_API_KEY to turn them on.');
-  let res;
+  if (!aiEnabled()) throw new HttpError(503, 'AI briefs are off. Set GEMINI_API_KEY to turn them on.');
+  let out: BriefOut;
   try {
-    res = await anthropic().beta.messages.parse({
-      model: MODEL,
-      max_tokens: 16000,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-      output_config: { effort: 'low', format: betaZodOutputFormat(BriefSchema) },
-      system: SYSTEM,
-      messages: [{ role: 'user', content: render(lead, notes, calls, totalCalls) }],
-    });
+    ({ data: out } = await geminiJson<BriefOut>({ system: SYSTEM, prompt: render(lead, notes, calls, totalCalls), schema: BRIEF_SCHEMA, thinking: 'medium', timeoutMs: 90_000 }));
   } catch (err) {
-    if (err instanceof Anthropic.RateLimitError) throw new HttpError(429, 'The AI service is busy. Try again in a minute.');
-    if (err instanceof Anthropic.AuthenticationError) throw new HttpError(503, 'The Anthropic API key was rejected.');
-    if (err instanceof Anthropic.APIError) {
-      console.error('Anthropic error', err.status, err.message);
-      throw new HttpError(502, 'The AI service returned an error.');
+    if (err instanceof GeminiError) {
+      console.error('Gemini error', err.status, err.message);
+      throw new HttpError(err.status === 429 ? 429 : err.status === 422 ? 422 : err.status === 503 ? 503 : 502,
+        err.status === 429 ? 'The AI service is busy. Try again in a minute.' : err.status === 422 ? 'The AI declined to summarise this lead.' : err.status === 503 ? 'The Gemini API key was rejected.' : 'The AI service returned an error.');
     }
     throw err;
   }
-  if (res.stop_reason === 'refusal') throw new HttpError(422, 'The AI declined to summarise this lead.');
-  const out = res.parsed_output;
-  if (!out) throw new HttpError(502, 'The AI returned an unreadable brief. Try again.');
-  return { ...out, talking_points: out.talking_points.slice(0, 4), at: Date.now(), calls: totalCalls };
+  return { ...out, talking_points: (out.talking_points ?? []).slice(0, 4), objections: out.objections ?? [], at: Date.now(), calls: totalCalls };
 }

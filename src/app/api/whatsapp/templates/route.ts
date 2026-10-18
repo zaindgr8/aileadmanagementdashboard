@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 // Approved WhatsApp templates (Twilio Content API) — needed to message outside the 24h window.
 export async function GET() {
-  if (!twilioConfigured) return NextResponse.json([]);
+  if (!(await twilioConfigured())) return NextResponse.json([]);
   try {
     return NextResponse.json(await listTemplates());
   } catch (err) {

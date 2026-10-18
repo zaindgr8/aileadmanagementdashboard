@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { getConversation, getMessages, updateConversation } from "@/lib/whatsapp/store";
+import { getConversation, getMessages, getSettings, updateConversation } from "@/lib/whatsapp/store";
+import { addNote, listAgents } from "@/lib/whatsapp/team";
+import { currentUser } from "@/lib/auth/current";
 import type { Lead } from "@/lib/whatsapp/types";
 import { sessionOpen } from "@/lib/whatsapp/twilio";
 import type { Conversation } from "@/lib/whatsapp/types";
@@ -23,6 +25,29 @@ export async function PATCH(req: Request, { params }: Ctx) {
   for (const k of EDITABLE) if (k in body) (patch as Record<string, unknown>)[k] = body[k];
   // Turning AI back on clears the "needs human" flag.
   if (patch.aiEnabled === true) Object.assign(patch, { needsHuman: false, handoffReason: undefined });
+  const before = await getConversation(id);
+  if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const me = await currentUser();
+  const events: string[] = [];
+
+  // Assigning: null/"" unassigns, otherwise it must be an active WhatsApp agent.
+  if ("assignee" in body && (body.assignee || null) !== (before.assignee || null)) {
+    if (body.assignee) {
+      const agent = (await listAgents()).find((a) => a.username === body.assignee && a.active);
+      if (!agent) return NextResponse.json({ error: "That teammate can't be assigned WhatsApp chats." }, { status: 400 });
+      Object.assign(patch, { assignee: agent.username, assignedAt: new Date().toISOString() });
+      events.push(agent.username === me?.username ? `${agent.name} took this chat` : `Assigned to ${agent.name}${me ? ` by ${me.name}` : ""}`);
+    } else {
+      Object.assign(patch, { assignee: undefined, assignedAt: undefined });
+      events.push(`Unassigned${me ? ` by ${me.name}` : ""}`);
+    }
+  }
+  // Optional rule: resolving a chat frees up the agent.
+  if (patch.status === "resolved" && before.status !== "resolved" && before.assignee && !("assignee" in body) && (await getSettings()).assignment.unassignOnResolve) {
+    Object.assign(patch, { assignee: undefined, assignedAt: undefined });
+    events.push("Resolved and unassigned");
+  }
+
   if (body.lead) {
     const prev = (await getConversation(id))?.lead;
     const base: Lead = prev ?? { stage: "new", score: 0, intent: "", summary: "", interest: "", budget: "", email: "", company: "", nextStep: "", source: "rules", analyzedAt: new Date().toISOString() };
@@ -31,5 +56,6 @@ export async function PATCH(req: Request, { params }: Ctx) {
   }
   const c = await updateConversation(id, patch);
   if (!c) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  for (const e of events) await addNote({ conversationId: id, author: "system", authorName: "System", kind: "event", body: e });
   return NextResponse.json(c);
 }

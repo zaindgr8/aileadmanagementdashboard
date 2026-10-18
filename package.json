@@ -11,7 +11,6 @@
     "user:hash": "node scripts/hash-password.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.133.0",
     "lucide-react": "^1.55.0",
     "next": "16.4.0",
     "react": "19.3.0",

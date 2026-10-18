@@ -3,20 +3,39 @@ import twilio from "twilio";
 import type { Author, Message } from "./types";
 import { getSettings, knownMessageStatuses, updateMessageStatus, upsertMessage } from "./store";
 import { scheduleLeadAnalysis } from "./leads";
+import { currentWorkspace, publicBaseUrl, twilioCreds, type TwilioCreds, type Workspace } from "../tenant/workspaces";
 
-const SID = process.env.TWILIO_ACCOUNT_SID;
-const TOKEN = process.env.TWILIO_AUTH_TOKEN;
-// Your WhatsApp sender, e.g. "whatsapp:+14155238886" (Sandbox) or your approved number.
-export const WHATSAPP_FROM = normalize(process.env.TWILIO_WHATSAPP_FROM || "");
-const MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID;
-export const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+// Each workspace has its own Twilio account and WhatsApp sender (Workspace settings → Connections).
+// The primary workspace falls back to TWILIO_* in .env.local.
+export { publicBaseUrl } from "../tenant/workspaces";
 
-export const twilioConfigured = Boolean(SID && TOKEN && (WHATSAPP_FROM || MESSAGING_SERVICE_SID));
+export interface TwilioCtx { client: twilio.Twilio; creds: TwilioCreds; workspace: string }
 
-let _client: twilio.Twilio | null = null;
-export function client() {
-  if (!SID || !TOKEN) throw new Error("Twilio is not configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN).");
-  return (_client ??= twilio(SID, TOKEN));
+const g = globalThis as typeof globalThis & { __twilioClients?: Map<string, twilio.Twilio> };
+const clients = (g.__twilioClients ??= new Map());
+
+function clientFor(c: TwilioCreds) {
+  const key = `${c.accountSid}:${c.authToken}`;
+  let cl = clients.get(key);
+  if (!cl) clients.set(key, (cl = twilio(c.accountSid, c.authToken)));
+  return cl;
+}
+
+/** The current workspace's Twilio connection, or null when it isn't connected yet. */
+export async function twilioFor(): Promise<TwilioCtx | null> {
+  const ws = await currentWorkspace();
+  const creds = twilioCreds(ws);
+  return creds ? { client: clientFor(creds), creds, workspace: ws.id } : null;
+}
+
+export async function twilioConfigured() {
+  return Boolean(await twilioFor());
+}
+
+async function requireTwilio(): Promise<TwilioCtx> {
+  const t = await twilioFor();
+  if (!t) throw new Error("WhatsApp isn't connected for this workspace yet (Workspace settings → Connections).");
+  return t;
 }
 
 export function normalize(addr: string) {
@@ -51,18 +70,20 @@ export async function sendWhatsApp({ to, body = "", author, contentSid, contentV
     createdAt: new Date().toISOString(),
   };
 
-  if (!twilioConfigured) {
+  const t = await twilioFor();
+  if (!t) {
     return upsertMessage({ ...base, id: `demo_${crypto.randomUUID()}`, status: "demo" });
   }
 
+  const callbackBase = publicBaseUrl();
   try {
-    const msg = await client().messages.create({
+    const msg = await t.client.messages.create({
       to: conversationId,
-      ...(MESSAGING_SERVICE_SID ? { messagingServiceSid: MESSAGING_SERVICE_SID } : { from: WHATSAPP_FROM }),
+      ...(t.creds.messagingServiceSid ? { messagingServiceSid: t.creds.messagingServiceSid } : { from: t.creds.from }),
       ...(contentSid
         ? { contentSid, contentVariables: contentVariables ? JSON.stringify(contentVariables) : undefined }
         : { body }),
-      ...(PUBLIC_BASE_URL ? { statusCallback: `${PUBLIC_BASE_URL}/api/webhooks/twilio/status` } : {}),
+      ...(callbackBase ? { statusCallback: `${callbackBase}/api/webhooks/twilio/status?ws=${encodeURIComponent(t.workspace)}` } : {}),
     });
     return upsertMessage({ ...base, id: msg.sid, status: msg.status, body: msg.body || base.body });
   } catch (err) {
@@ -75,11 +96,12 @@ export async function sendWhatsApp({ to, body = "", author, contentSid, contentV
 /** Import past WhatsApp messages from Twilio's message log into the dashboard. */
 export async function importHistory(limit = 1000, since?: Date) {
   const automation = (await getSettings()).agentMode === "n8n";
-  const c = client();
-  const ours = new Set([WHATSAPP_FROM].filter(Boolean));
+  const { client: c, creds } = await requireTwilio();
+  const from = creds.from;
+  const ours = new Set([from].filter(Boolean));
   const [sent, received] = await Promise.all([
-    WHATSAPP_FROM ? c.messages.list({ from: WHATSAPP_FROM, limit, dateSentAfter: since }) : c.messages.list({ limit, dateSentAfter: since }),
-    WHATSAPP_FROM ? c.messages.list({ to: WHATSAPP_FROM, limit, dateSentAfter: since }) : Promise.resolve([]),
+    from ? c.messages.list({ from, limit, dateSentAfter: since }) : c.messages.list({ limit, dateSentAfter: since }),
+    from ? c.messages.list({ to: from, limit, dateSentAfter: since }) : Promise.resolve([]),
   ]);
 
   const all = [...sent, ...received];
@@ -120,7 +142,7 @@ export async function importHistory(limit = 1000, since?: Date) {
 }
 
 export async function listTemplates() {
-  const items = await client().content.v1.contentAndApprovals.list({ limit: 100 });
+  const items = await (await requireTwilio()).client.content.v1.contentAndApprovals.list({ limit: 100 });
   return items.map((t) => ({
     sid: t.sid,
     name: t.friendlyName,
@@ -131,15 +153,25 @@ export async function listTemplates() {
   }));
 }
 
-/** Verify the request really came from Twilio (X-Twilio-Signature). */
-export function verifyTwilio(req: Request, params: Record<string, string>) {
+/** Verify the request really came from Twilio (X-Twilio-Signature), signed with this workspace's auth token. */
+export function verifyTwilio(req: Request, params: Record<string, string>, ws: Workspace) {
   if (process.env.TWILIO_SKIP_SIGNATURE === "true") return true;
-  const token = process.env.TWILIO_AUTH_TOKEN;
+  const token = twilioCreds(ws)?.authToken;
   const signature = req.headers.get("x-twilio-signature");
   if (!token || !signature) return false;
   // Twilio signs the public URL it called, which differs from req.url behind ngrok / a proxy.
   const u = new URL(req.url);
-  const url = PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}${u.pathname}${u.search}` : req.url;
+  const base = publicBaseUrl();
+  const url = base ? `${base}${u.pathname}${u.search}` : req.url;
   return twilio.validateRequest(token, signature, url, params);
+}
+
+/** Check a Twilio account SID + auth token and sender before saving them. */
+export async function testTwilio(c: { accountSid: string; authToken: string; from?: string; messagingServiceSid?: string }) {
+  const cl = twilio(c.accountSid, c.authToken);
+  const account = await cl.api.v2010.accounts(c.accountSid).fetch();
+  let sender = "";
+  if (c.messagingServiceSid) sender = (await cl.messaging.v1.services(c.messagingServiceSid).fetch()).friendlyName;
+  return { account: account.friendlyName, status: account.status, sender };
 }
 

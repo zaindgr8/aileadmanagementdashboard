@@ -6,7 +6,7 @@ import { MODULES, type ModuleKey, type Role, type SessionUser } from './modules'
 export const SESSION_COOKIE = 'alm_session';
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-interface Payload { u: string; n: string; r: Role; m: ModuleKey[]; exp: number }
+interface Payload { u: string; n: string; r: Role; m: ModuleKey[]; w: string; wn: string; pa?: boolean; exp: number }
 
 function secret() {
   const s = process.env.SESSION_SECRET;
@@ -17,7 +17,10 @@ function secret() {
 const sign = (v: string) => createHmac('sha256', secret()).update(v).digest('base64url');
 
 export function createSession(user: SessionUser) {
-  const payload: Payload = { u: user.username, n: user.name, r: user.role, m: user.modules, exp: Date.now() + SESSION_TTL_MS };
+  const payload: Payload = {
+    u: user.username, n: user.name, r: user.role, m: user.modules, w: user.workspace, wn: user.workspaceName,
+    ...(user.platformAdmin ? { pa: true } : {}), exp: Date.now() + SESSION_TTL_MS,
+  };
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
   return `${body}.${sign(body)}`;
 }
@@ -33,8 +36,12 @@ export function readSession(token?: string | null): SessionUser | null {
   if (sig.length !== expect.length || !timingSafeEqual(sig, expect)) return null;
   try {
     const p = JSON.parse(Buffer.from(body, 'base64url').toString()) as Payload;
-    if (!(p.exp > Date.now())) return null;
-    return { username: p.u, name: p.n, role: p.r, modules: p.m.filter((m) => (MODULES as readonly string[]).includes(m)) };
+    // Sessions from before workspaces existed have no workspace: sign in again.
+    if (!(p.exp > Date.now()) || !p.w) return null;
+    return {
+      username: p.u, name: p.n, role: p.r, modules: p.m.filter((m) => (MODULES as readonly string[]).includes(m)),
+      workspace: p.w, workspaceName: p.wn ?? p.w, platformAdmin: Boolean(p.pa),
+    };
   } catch {
     return null;
   }
@@ -47,3 +54,13 @@ export const cookieOptions = (secure: boolean) => ({
   path: '/',
   maxAge: SESSION_TTL_MS / 1000,
 });
+
+/** Set the session cookie on a response (secure when served over https, including behind a proxy). */
+export function withSession<R extends { cookies: { set: (name: string, value: string, opts: ReturnType<typeof cookieOptions>) => unknown } }>(
+  req: { headers: Headers; nextUrl: { protocol: string } }, res: R, user: SessionUser,
+): R {
+  // Behind a TLS-terminating proxy the request itself arrives over http.
+  const proto = (req.headers.get('x-forwarded-proto') ?? req.nextUrl.protocol.replace(':', '')).split(',')[0].trim();
+  res.cookies.set(SESSION_COOKIE, createSession(user), cookieOptions(process.env.NODE_ENV === 'production' && proto === 'https'));
+  return res;
+}

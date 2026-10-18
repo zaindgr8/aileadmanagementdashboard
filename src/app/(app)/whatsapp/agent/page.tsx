@@ -5,12 +5,14 @@ import { AlertCircle, Bot, CheckCircle2, Copy, Forward, Hand, Loader2, Pause, Pl
 import { api, timeAgo, useLive } from "@/lib/whatsapp/client";
 import type { AgentEvent, Settings } from "@/lib/whatsapp/types";
 
-type Env = { twilioConfigured: boolean; aiConfigured: boolean; whatsappFrom: string; publicBaseUrl: string };
+type Env = { twilioConfigured: boolean; aiConfigured: boolean; geminiModel: string | null; whatsappFrom: string; publicBaseUrl: string };
 
+// Gemini models offered for the built-in agent (mirrors GEMINI_MODELS in lib/ai/gemini.ts).
 const MODELS = [
-  { id: "claude-opus-5-5", name: "Claude Opus 5.5", note: "Best quality (default)" },
-  { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", note: "Fast and capable" },
-  { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", note: "Fastest, lowest cost" },
+  { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash", note: "Newest, fast and smart (recommended)" },
+  { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash", note: "Fast and dependable" },
+  { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", note: "Deepest reasoning, slower" },
+  { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite", note: "Fastest, lowest cost" },
 ] as const;
 
 export default function AgentPage() {
@@ -77,7 +79,7 @@ export default function AgentPage() {
               <div className="grid gap-2 sm:grid-cols-2">
                 {([
                   { id: "n8n", title: "n8n workflow", desc: "Messages are forwarded to your n8n automation, which replies.", Icon: Workflow },
-                  { id: "claude", title: "Built-in Claude agent", desc: "The dashboard answers with Claude using the settings below.", Icon: Bot },
+                  { id: "builtin", title: "Built-in AI agent (Gemini)", desc: "The dashboard answers with Gemini using the settings below.", Icon: Bot },
                 ] as const).map(({ id, title, desc, Icon }) => (
                   <button key={id} onClick={() => set("agentMode", id)}
                     className={`flex gap-3 rounded-xl border p-3 text-left transition ${s.agentMode === id ? "border-brand bg-brand-soft" : "border-line hover:bg-panel-2"}`}>
@@ -95,7 +97,7 @@ export default function AgentPage() {
               )}
             </Card>
 
-            {s.agentMode === "claude" && <>
+            {s.agentMode === "builtin" && <>
             <Card title="Persona & instructions" hint="This is the system prompt. Use {{business}} for your business name.">
               <label className="mb-3 block">
                 <span className="mb-1 block text-xs font-medium text-ink-2">Business name</span>
@@ -105,8 +107,8 @@ export default function AgentPage() {
               <p className="mt-2 text-xs text-ink-3">Tip: paste your FAQs, prices, opening hours and policies here so the agent can answer accurately.</p>
             </Card>
 
-            <Card title="Model">
-              <div className="grid gap-2 sm:grid-cols-3">
+            <Card title="Gemini model">
+              <div className="grid gap-2 sm:grid-cols-2">
                 {MODELS.map((m) => (
                   <button key={m.id} onClick={() => set("model", m.id)}
                     className={`rounded-xl border p-3 text-left transition ${s.model === m.id ? "border-brand bg-brand-soft" : "border-line hover:bg-panel-2"}`}>
@@ -117,7 +119,7 @@ export default function AgentPage() {
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label>
-                  <span className="mb-1 block text-xs font-medium text-ink-2">Effort (reply depth vs. speed)</span>
+                  <span className="mb-1 block text-xs font-medium text-ink-2">Thinking (reply depth vs. speed)</span>
                   <select className="input" value={s.effort} onChange={(e) => set("effort", e.target.value as Settings["effort"])}>
                     <option value="low">Low — quickest replies (recommended for chat)</option>
                     <option value="medium">Medium</option>
@@ -140,7 +142,7 @@ export default function AgentPage() {
               <textarea className="input min-h-20" value={s.handoffMessage} onChange={(e) => set("handoffMessage", e.target.value)} />
             </Card>
 
-            <Card title="Lead scoring" hint="After each burst of customer messages, the AI scores the chat 0–100, sets its stage (New → Qualified → Hot), and pulls out email, company, budget and the next step. Runs on Claude — also when n8n is the agent.">
+            <Card title="Lead scoring" hint="After each burst of customer messages, the AI scores the chat 0–100, sets its stage (New → Qualified → Hot), and pulls out email, company, budget and the next step. Gemini also reads the agent's notes and the person's sign-up and purchase records, explains the score, and sets a P1–P4 priority. Runs whether n8n or the built-in agent replies.">
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={s.leadScoring} onChange={(e) => set("leadScoring", e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <Target size={15} className="text-brand" /> Score leads automatically
@@ -149,7 +151,9 @@ export default function AgentPage() {
                 <>
                   <span className="mb-1 mt-3 block text-xs font-medium text-ink-2">What a good lead looks like for you</span>
                   <textarea className="input min-h-24" value={s.leadCriteria} onChange={(e) => set("leadCriteria", e.target.value)} />
-                  {!env.aiConfigured && <p className="mt-1.5 text-xs text-warn">No ANTHROPIC_API_KEY — using simple keyword rules until a key is added.</p>}
+                  {env.aiConfigured
+                    ? <p className="mt-1.5 text-xs text-ok">Scoring with {env.geminiModel ?? "Gemini"}.</p>
+                    : <p className="mt-1.5 text-xs text-warn">No GEMINI_API_KEY — using simple keyword rules until a key is added.</p>}
                 </>
               )}
             </Card>
@@ -182,10 +186,10 @@ export default function AgentPage() {
 
           <div className="space-y-6">
             <Card title="Connection">
-              <Status ok={env.twilioConfigured} label="Twilio" detail={env.twilioConfigured ? env.whatsappFrom || "Messaging Service" : "Add TWILIO_* to .env.local"} />
+              <Status ok={env.twilioConfigured} label="Twilio" detail={env.twilioConfigured ? env.whatsappFrom || "Messaging Service" : "Connect in Workspace settings"} />
               {s.agentMode === "n8n"
                 ? <Status ok={Boolean(s.forwardUrl)} label="n8n" detail={s.forwardUrl ? hostOf(s.forwardUrl) : "Add the webhook URL"} />
-                : <Status ok={env.aiConfigured} label="Claude API" detail={env.aiConfigured ? "Key loaded" : "Add ANTHROPIC_API_KEY"} />}
+                : <Status ok={env.aiConfigured} label="Gemini API" detail={env.aiConfigured ? "Key loaded" : "Add GEMINI_API_KEY"} />}
               <div className="mt-4">
                 <div className="mb-1 text-xs font-medium text-ink-2">Twilio “A message comes in” webhook (HTTP POST)</div>
                 <div className="flex items-center gap-2 rounded-lg bg-panel-2 px-3 py-2">

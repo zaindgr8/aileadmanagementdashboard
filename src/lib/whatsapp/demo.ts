@@ -1,11 +1,13 @@
 import "server-only";
 import { countConversations, ensureConversation, updateConversation, upsertMessage, logAgentEvent } from "./store";
 import { twilioConfigured } from "./twilio";
+import { currentWorkspace } from "../tenant/workspaces";
 import type { Author, Lead } from "./types";
 
-/** Fill an empty dashboard with sample chats so you can explore it before connecting Twilio. */
+/** Fill an empty dashboard with sample chats so you can explore it before connecting Twilio (primary workspace only:
+ * a new client should see their own empty inbox, not made-up chats). */
 export async function seedDemoIfEmpty() {
-  if (twilioConfigured || process.env.DISABLE_DEMO === "true") return;
+  if (process.env.DISABLE_DEMO === "true" || !(await currentWorkspace()).isPrimary || (await twilioConfigured())) return;
   if (await countConversations()) return;
 
   const now = Date.now();
@@ -77,7 +79,7 @@ export async function seedDemoIfEmpty() {
         },
         { countUnread: author === "customer" && agoMin < 20 },
       );
-      if (author === "ai") await logAgentEvent({ conversationId: id, type: "reply", detail: body, model: "claude-opus-5-5", latencyMs: 1400 + i * 120, inputTokens: 900, outputTokens: 60 });
+      if (author === "ai") await logAgentEvent({ conversationId: id, type: "reply", detail: body, model: "gemini-3.8-flash", latencyMs: 1400 + i * 120, inputTokens: 900, outputTokens: 60 });
     }
     await updateConversation(id, {
       aiEnabled: c.ai, needsHuman: !!c.needsHuman, handoffReason: c.reason,

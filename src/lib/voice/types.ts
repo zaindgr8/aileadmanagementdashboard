@@ -57,7 +57,7 @@ export interface DashboardConfig {
   phoneNumbers: PhoneNumber[];
   concurrency: Concurrency | null;
   restricted: boolean;
-  /** True when an Anthropic key is configured, enabling AI lead briefs. */
+  /** True when a Gemini key is configured, enabling AI lead briefs. */
   aiEnabled: boolean;
 }
 

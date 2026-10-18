@@ -160,7 +160,7 @@ export function LeadDrawer() {
                       </button>
                     )}
                   </div>
-                  {!config?.aiEnabled && <p className="tiny muted" style={{ margin: 0 }}>Add <span className="mono">ANTHROPIC_API_KEY</span> to the server settings to get AI summaries, buying intent and talking points for each lead.</p>}
+                  {!config?.aiEnabled && <p className="tiny muted" style={{ margin: 0 }}>Add <span className="mono">GEMINI_API_KEY</span> to the server settings to get AI summaries, buying intent and talking points for each lead.</p>}
                   {config?.aiEnabled && !b && busy !== 'brief' && <p className="tiny muted" style={{ margin: 0 }}>Reads this lead&apos;s calls and notes, then tells you their intent, objections and what to say next.</p>}
                   {busy === 'brief' && <div className="skeleton" style={{ height: 120 }} />}
                   {b && busy !== 'brief' && (

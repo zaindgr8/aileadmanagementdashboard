@@ -2,14 +2,17 @@ import "server-only";
 import { EventEmitter } from "node:events";
 import type { AgentEvent, Conversation, Message, Settings } from "./types";
 import { q, qList, sb, sbAll } from "../supabase";
+import { workspaceId, wsFilter as ws } from "../tenant/context";
+import { currentWorkspace } from "../tenant/workspaces";
 
-// All chats, messages, settings and agent activity live in Supabase (see supabase/schema.sql),
+// All chats, messages, settings and agent activity live in Supabase (see supabase/whatsapp.sql),
 // so every server instance — local or on Vercel — reads the same data and nothing is lost on restart.
+// Every row belongs to a workspace (client account); each query below is limited to the current one.
 
 export const DEFAULT_SETTINGS: Settings = {
   agentEnabled: true,
-  agentMode: process.env.N8N_WEBHOOK_URL ? "n8n" : "claude",
-  forwardUrl: process.env.N8N_WEBHOOK_URL || "",
+  agentMode: "builtin",
+  forwardUrl: "",
   businessName: "My Business",
   systemPrompt: `You are the friendly WhatsApp assistant for {{business}}.
 
@@ -17,7 +20,7 @@ export const DEFAULT_SETTINGS: Settings = {
 - Be warm, clear and helpful. Use plain text; avoid markdown headings and tables.
 - Never invent prices, policies, order details or availability. If you don't know, say a teammate will follow up.
 - If the customer asks for a human, is upset, or needs something you can't do, hand off.`,
-  model: "claude-opus-5-5",
+  model: "gemini-3.8-flash",
   effort: "low",
   historyLimit: 30,
   handoffKeywords: ["human", "agent", "representative", "talk to someone"],
@@ -28,6 +31,7 @@ export const DEFAULT_SETTINGS: Settings = {
   leadScoring: true,
   leadCriteria: `A qualified lead has a clear need we can solve and shares contact details or asks about pricing.
 A hot lead mentions budget, a timeline, or asks to book a call or meeting.`,
+  assignment: { mode: "off", when: "all", capacity: 0, onlyAvailable: true, unassignOnResolve: false },
 };
 
 type Global = typeof globalThis & { __waBus?: EventEmitter };
@@ -38,8 +42,9 @@ const g = globalThis as Global;
 export const bus: EventEmitter = g.__waBus ?? (g.__waBus = new EventEmitter());
 bus.setMaxListeners(100);
 
-function emit(type: string, conversationId?: string) {
-  bus.emit("change", { type, conversationId });
+/** Tell this workspace's open dashboards that something changed. */
+export function emit(workspace: string, type: string, conversationId?: string) {
+  bus.emit("change", { workspace, type, conversationId });
 }
 
 // Postgres returns "2026-10-15T13:43:34.553+00:00"; the app compares ISO strings, so keep them in "…Z" form.
@@ -64,6 +69,8 @@ interface ConvRow {
   last_inbound_at: string | null;
   created_at: string;
   lead: Conversation["lead"] | null;
+  assignee: string | null;
+  assigned_at: string | null;
 }
 
 function toConversation(r: ConvRow): Conversation {
@@ -84,6 +91,8 @@ function toConversation(r: ConvRow): Conversation {
     lastInboundAt: isoOpt(r.last_inbound_at),
     createdAt: iso(r.created_at),
     lead: r.lead ?? undefined,
+    assignee: r.assignee ?? undefined,
+    assignedAt: isoOpt(r.assigned_at),
   };
 }
 
@@ -104,6 +113,8 @@ const CONV_COLUMNS: Record<keyof Conversation, keyof ConvRow> = {
   lastInboundAt: "last_inbound_at",
   createdAt: "created_at",
   lead: "lead",
+  assignee: "assignee",
+  assignedAt: "assigned_at",
 };
 
 /** Map a partial Conversation to columns. A key set to undefined clears the column. */
@@ -169,37 +180,51 @@ function toAgentEvent(r: AgentEventRow): AgentEvent {
 }
 
 // ---------- settings ----------
+/** Defaults for a workspace that hasn't saved settings yet. */
+async function defaults(): Promise<Settings> {
+  const w = await currentWorkspace();
+  const n8n = w.isPrimary ? process.env.N8N_WEBHOOK_URL || "" : "";
+  return { ...DEFAULT_SETTINGS, businessName: w.name, agentMode: n8n ? "n8n" : "builtin", forwardUrl: n8n };
+}
+
 export async function getSettings(): Promise<Settings> {
-  const rows = await sb<{ data: Partial<Settings> }[]>("settings?id=eq.1&select=data");
-  return { ...DEFAULT_SETTINGS, ...rows[0]?.data };
+  const [rows, base] = await Promise.all([sb<{ data: Partial<Settings> }[]>(`settings?${await ws()}&select=data`), defaults()]);
+  const raw: Record<string, unknown> = { ...(rows[0]?.data ?? {}) };
+  // Settings saved before the move from Claude to Gemini.
+  if (raw.agentMode === "claude") raw.agentMode = "builtin";
+  if (typeof raw.model === "string" && !raw.model.startsWith("gemini-")) delete raw.model;
+  const data = raw as Partial<Settings>;
+  return { ...base, ...data, assignment: { ...base.assignment, ...data.assignment } };
 }
 export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {
+  const id = await workspaceId();
   const settings = { ...(await getSettings()), ...patch };
-  await sb("settings?on_conflict=id", { method: "POST", body: { id: 1, data: settings }, prefer: "resolution=merge-duplicates" });
-  emit("settings");
+  await sb("settings?on_conflict=workspace_id", { method: "POST", body: { workspace_id: id, data: settings }, prefer: "resolution=merge-duplicates" });
+  emit(id, "settings");
   return settings;
 }
 
 // ---------- conversations ----------
 export async function listConversations(): Promise<Conversation[]> {
-  return (await sbAll<ConvRow>("conversations?select=*&order=last_message_at.desc")).map(toConversation);
+  return (await sbAll<ConvRow>(`conversations?${await ws()}&select=*&order=last_message_at.desc`)).map(toConversation);
 }
 export async function countConversations(): Promise<number> {
-  return (await sb<{ id: string }[]>("conversations?select=id&limit=1")).length;
+  return (await sb<{ id: string }[]>(`conversations?${await ws()}&select=id&limit=1`)).length;
 }
 export async function getConversation(id: string): Promise<Conversation | undefined> {
-  const rows = await sb<ConvRow[]>(`conversations?id=eq.${q(id)}&select=*`);
+  const rows = await sb<ConvRow[]>(`conversations?${await ws()}&id=eq.${q(id)}&select=*`);
   return rows[0] ? toConversation(rows[0]) : undefined;
 }
 
 export async function ensureConversation(id: string, profileName = ""): Promise<Conversation> {
-  await sb("conversations?on_conflict=id", {
+  const w = await workspaceId();
+  await sb("conversations?on_conflict=workspace_id,id", {
     method: "POST",
-    body: { id, phone: id.replace(/^whatsapp:/, ""), profile_name: profileName },
+    body: { workspace_id: w, id, phone: id.replace(/^whatsapp:/, ""), profile_name: profileName },
     prefer: "resolution=ignore-duplicates",
   });
   if (profileName) {
-    await sb(`conversations?id=eq.${q(id)}&profile_name=neq.${q(profileName)}`, { method: "PATCH", body: { profile_name: profileName } });
+    await sb(`conversations?${await ws()}&id=eq.${q(id)}&profile_name=neq.${q(profileName)}`, { method: "PATCH", body: { profile_name: profileName } });
   }
   return (await getConversation(id))!;
 }
@@ -207,31 +232,33 @@ export async function ensureConversation(id: string, profileName = ""): Promise<
 export async function updateConversation(id: string, patch: Partial<Conversation>): Promise<Conversation | undefined> {
   const { id: _ignored, ...rest } = patch;
   void _ignored;
-  const rows = await sb<ConvRow[]>(`conversations?id=eq.${q(id)}`, {
+  const w = await workspaceId();
+  const rows = await sb<ConvRow[]>(`conversations?${await ws()}&id=eq.${q(id)}`, {
     method: "PATCH",
     body: conversationRow(rest),
     prefer: "return=representation",
   });
   if (!rows[0]) return undefined;
-  emit("conversation", id);
+  emit(w, "conversation", id);
   return toConversation(rows[0]);
 }
 
 // ---------- messages ----------
 export async function getMessages(conversationId: string): Promise<Message[]> {
-  return (await sbAll<MessageRow>(`messages?conversation_id=eq.${q(conversationId)}&select=*&order=created_at.asc`)).map(toMessage);
+  return (await sbAll<MessageRow>(`messages?${await ws()}&conversation_id=eq.${q(conversationId)}&select=*&order=created_at.asc`)).map(toMessage);
 }
 
 export async function allMessages(): Promise<Message[]> {
-  return (await sbAll<MessageRow>("messages?select=*&order=created_at.asc")).map(toMessage);
+  return (await sbAll<MessageRow>(`messages?${await ws()}&select=*&order=created_at.asc`)).map(toMessage);
 }
 
 /** Status of each message we already have, for the given ids. */
 export async function knownMessageStatuses(ids: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
+  const w = await ws();
   for (let i = 0; i < ids.length; i += 200) {
     const chunk = ids.slice(i, i + 200);
-    const rows = await sb<{ id: string; status: string }[]>(`messages?select=id,status&id=in.(${chunk.map(qList).join(",")})`);
+    const rows = await sb<{ id: string; status: string }[]>(`messages?${w}&select=id,status&id=in.(${chunk.map(qList).join(",")})`);
     for (const r of rows) out.set(r.id, r.status);
   }
   return out;
@@ -239,22 +266,24 @@ export async function knownMessageStatuses(ids: string[]): Promise<Map<string, s
 
 /** Insert or update a message and keep the conversation summary in sync (atomically, in Postgres). */
 export async function upsertMessage(msg: Message, opts: { countUnread?: boolean } = {}): Promise<Message> {
-  await sb("rpc/record_message", { method: "POST", body: { m: msg, count_unread: Boolean(opts.countUnread) } });
-  emit("message", msg.conversationId);
+  const w = await workspaceId();
+  await sb("rpc/record_message", { method: "POST", body: { ws: w, m: msg, count_unread: Boolean(opts.countUnread) } });
+  emit(w, "message", msg.conversationId);
   return msg;
 }
 
 export async function updateMessageStatus(id: string, status: string, error?: string) {
-  const rows = await sb<{ conversation_id: string }[]>(`messages?id=eq.${q(id)}&select=conversation_id`, {
+  const w = await workspaceId();
+  const rows = await sb<{ conversation_id: string }[]>(`messages?${await ws()}&id=eq.${q(id)}&select=conversation_id`, {
     method: "PATCH",
     body: { status, ...(error ? { error } : {}) },
     prefer: "return=representation",
   });
-  if (rows[0]) emit("status", rows[0].conversation_id);
+  if (rows[0]) emit(w, "status", rows[0].conversation_id);
 }
 
 export async function searchMessages(f: { text?: string; author?: string; from?: string; to?: string; conversationId?: string }) {
-  const params = ["select=*", "order=created_at.desc"];
+  const params = [await ws(), "select=*", "order=created_at.desc"];
   if (f.conversationId) params.push(`conversation_id=eq.${q(f.conversationId)}`);
   if (f.author && f.author !== "all") params.push(`author=eq.${q(f.author)}`);
   if (f.from) params.push(`created_at=gte.${q(f.from)}`);
@@ -266,9 +295,11 @@ export async function searchMessages(f: { text?: string; author?: string; from?:
 
 // ---------- agent activity ----------
 export async function logAgentEvent(e: Omit<AgentEvent, "id" | "at">) {
+  const w = await workspaceId();
   await sb("agent_events", {
     method: "POST",
     body: {
+      workspace_id: w,
       conversation_id: e.conversationId,
       type: e.type,
       detail: e.detail,
@@ -278,8 +309,8 @@ export async function logAgentEvent(e: Omit<AgentEvent, "id" | "at">) {
       output_tokens: e.outputTokens ?? null,
     },
   });
-  emit("agent", e.conversationId);
+  emit(w, "agent", e.conversationId);
 }
 export async function listAgentEvents(limit = 100): Promise<AgentEvent[]> {
-  return (await sb<AgentEventRow[]>(`agent_events?select=*&order=at.desc&limit=${limit}`)).map(toAgentEvent);
+  return (await sb<AgentEventRow[]>(`agent_events?${await ws()}&select=*&order=at.desc&limit=${limit}`)).map(toAgentEvent);
 }

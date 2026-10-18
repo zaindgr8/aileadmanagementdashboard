@@ -2,8 +2,10 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { moduleForPath } from '@/lib/auth/modules';
 import { readSession, SESSION_COOKIE } from '@/lib/auth/session';
 
-// Twilio webhooks verify their own signature; the auth endpoint is how you sign in.
-const PUBLIC_PREFIXES = ['/api/auth', '/api/webhooks'];
+// Twilio webhooks verify their own signature; the auth endpoint is how you sign in;
+// sign-up and invite links are for people who don't have an account yet.
+const PUBLIC_PREFIXES = ['/api/auth', '/api/webhooks', '/api/signup', '/api/invite'];
+const GUEST_PAGES = ['/login', '/signup', '/invite'];
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -12,14 +14,22 @@ export function proxy(req: NextRequest) {
   const user = readSession(req.cookies.get(SESSION_COOKIE)?.value);
   const isApi = pathname.startsWith('/api/');
 
-  if (pathname === '/login') {
-    return user ? NextResponse.redirect(new URL('/', req.url)) : NextResponse.next();
+  if (GUEST_PAGES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+    // Signed-in people can still open an invite link (e.g. to accept it with a different account after signing out).
+    return user && !pathname.startsWith('/invite') ? NextResponse.redirect(new URL('/', req.url)) : NextResponse.next();
   }
   if (!user) {
     if (isApi) return NextResponse.json({ error: 'Please sign in' }, { status: 401 });
     const url = new URL('/login', req.url);
     if (pathname !== '/') url.searchParams.set('next', pathname);
     return NextResponse.redirect(url);
+  }
+
+  // The platform console is for platform admins only.
+  if (pathname === '/admin' || pathname.startsWith('/admin/') || pathname.startsWith('/api/admin/')) {
+    if (user.platformAdmin) return NextResponse.next();
+    if (isApi) return NextResponse.json({ error: 'Platform admins only' }, { status: 403 });
+    return NextResponse.redirect(new URL('/', req.url));
   }
 
   // Module access: a user only reaches the parts of the product they've been given.

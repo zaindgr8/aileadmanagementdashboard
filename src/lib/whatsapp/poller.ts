@@ -1,36 +1,55 @@
 import "server-only";
 import { countConversations } from "./store";
 import { importHistory, twilioConfigured } from "./twilio";
+import { inWorkspace, workspaceId } from "../tenant/context";
+import { listWorkspaces } from "../tenant/workspaces";
 
 // Messages your n8n workflow sends go straight through Twilio, so the dashboard
 // checks Twilio regularly to show them (and their delivery status) in the chats.
+// Each workspace is checked with its own Twilio account.
 const INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS ?? 15_000);
 const LOOKBACK_MS = 30 * 60_000;
 
-const g = globalThis as typeof globalThis & { __waPoller?: NodeJS.Timeout; __waPolling?: boolean; __waLastSync?: number };
+const g = globalThis as typeof globalThis & { __waPollerWs?: NodeJS.Timeout; __waPollingWs?: Set<string>; __waLastSyncWs?: Map<string, number> };
+const polling = (g.__waPollingWs ??= new Set());
+const lastSync = (g.__waLastSyncWs ??= new Map());
 
-/** Pull recent messages from Twilio into Supabase, at most once per interval per server instance. */
+/** Pull the current workspace's recent messages from Twilio, at most once per interval per server instance. */
 export async function syncFromTwilio() {
-  if (!twilioConfigured || INTERVAL_MS <= 0 || g.__waPolling) return;
-  if (g.__waLastSync && Date.now() - g.__waLastSync < INTERVAL_MS) return;
-  g.__waPolling = true;
-  g.__waLastSync = Date.now();
+  if (INTERVAL_MS <= 0) return;
+  const id = await workspaceId();
+  if (polling.has(id) || Date.now() - (lastSync.get(id) ?? 0) < INTERVAL_MS) return;
+  if (!(await twilioConfigured())) return;
+  polling.add(id);
+  lastSync.set(id, Date.now());
   try {
     // First run on an empty dashboard: bring in the full history.
     if (!(await countConversations())) await importHistory(1000);
     else await importHistory(100, new Date(Date.now() - LOOKBACK_MS));
   } catch (err) {
-    console.error("[sync]", err instanceof Error ? err.message : err);
+    console.error(`[sync:${id}]`, err instanceof Error ? err.message : err);
   } finally {
-    g.__waPolling = false;
+    polling.delete(id);
   }
+}
+
+/** Every active workspace, one after another. */
+export async function syncAllWorkspaces() {
+  let list;
+  try {
+    list = (await listWorkspaces()).filter((w) => w.status === "active");
+  } catch (err) {
+    console.error("[sync]", err instanceof Error ? err.message : err);
+    return;
+  }
+  for (const w of list) await inWorkspace(w.id, syncFromTwilio);
 }
 
 // Long-running servers (local / `next start`) check on a timer. On Vercel, timers don't
 // survive between requests, so the dashboard's own refreshes also call syncFromTwilio().
 export function startPoller() {
-  if (!twilioConfigured || INTERVAL_MS <= 0 || g.__waPoller) return;
-  g.__waPoller = setInterval(() => void syncFromTwilio(), INTERVAL_MS);
-  void syncFromTwilio();
+  if (INTERVAL_MS <= 0 || g.__waPollerWs) return;
+  g.__waPollerWs = setInterval(() => void syncAllWorkspaces(), INTERVAL_MS);
+  void syncAllWorkspaces();
   console.log(`[sync] Checking Twilio for new WhatsApp messages every ${INTERVAL_MS / 1000}s`);
 }

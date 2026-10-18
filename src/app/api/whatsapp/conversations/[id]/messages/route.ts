@@ -14,7 +14,7 @@ export async function POST(req: Request, { params }: Ctx) {
   if (!body?.trim() && !contentSid) return NextResponse.json({ error: "Message is empty" }, { status: 400 });
 
   const conv = (await getConversation(id)) ?? (await ensureConversation(id));
-  if (twilioConfigured && !contentSid && !sessionOpen(conv.lastInboundAt)) {
+  if ((await twilioConfigured()) && !contentSid && !sessionOpen(conv.lastInboundAt)) {
     // WhatsApp rejects free-form messages outside the 24h customer-service window.
     return NextResponse.json({ error: "The 24-hour WhatsApp window is closed. Send an approved template instead." }, { status: 409 });
   }

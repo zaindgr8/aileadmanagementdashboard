@@ -5,5 +5,5 @@ import type { DashboardConfig } from '@/lib/voice/types';
 
 export const GET = route(async () => {
   const [agents, phoneNumbers, concurrency] = await Promise.all([listAgents(), listPhoneNumbers(), getConcurrency()]);
-  return json({ agents, phoneNumbers, concurrency, restricted: isRestricted(), aiEnabled: aiEnabled() } satisfies DashboardConfig);
+  return json({ agents, phoneNumbers, concurrency, restricted: await isRestricted(), aiEnabled: aiEnabled() } satisfies DashboardConfig);
 });

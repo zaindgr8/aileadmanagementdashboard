@@ -1,13 +1,14 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
+import { geminiChat, geminiConfigured, type ChatTurn } from "../ai/gemini";
 import type { Message, Settings } from "./types";
 import { getConversation, getMessages, getSettings, logAgentEvent, updateConversation } from "./store";
 import { sendWhatsApp } from "./twilio";
+import { bindWorkspace, workspaceId } from "../tenant/context";
 
 const HANDOFF = "[[HANDOFF]]";
-const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY
 
-export const aiConfigured = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+/** The built-in agent and AI drafts run on Gemini (GEMINI_API_KEY). */
+export const aiConfigured = geminiConfigured;
 
 function systemPrompt(s: Settings) {
   return `${s.systemPrompt.replaceAll("{{business}}", s.businessName)}
@@ -16,21 +17,21 @@ function systemPrompt(s: Settings) {
 If the customer asks for a human, is frustrated, or needs something you cannot reliably do, reply with exactly ${HANDOFF} followed by a one-line reason for the team (the customer will not see it). Otherwise reply directly to the customer.`;
 }
 
-/** Turn the WhatsApp thread into alternating user/assistant turns for Claude. */
-function toClaudeMessages(history: Message[]): Anthropic.Beta.BetaMessageParam[] {
-  const out: Anthropic.Beta.BetaMessageParam[] = [];
+/** Turn the WhatsApp thread into alternating user/model turns for Gemini. */
+function toTurns(history: Message[]): ChatTurn[] {
+  const out: ChatTurn[] = [];
   for (const m of history) {
     if (m.author === "system" || m.status === "failed") continue;
-    const role = m.direction === "inbound" ? "user" : "assistant";
+    const role = m.direction === "inbound" ? "user" : "model";
     let text = m.body || (m.media.length ? `[sent ${m.media.length} attachment(s): ${m.media.map((x) => x.contentType).join(", ")}]` : "");
     if (!text) continue;
     if (m.author === "agent") text = `(human teammate) ${text}`;
     const last = out[out.length - 1];
-    if (last && last.role === role) last.content = `${last.content as string}\n${text}`;
-    else out.push({ role, content: text });
+    if (last && last.role === role) last.text = `${last.text}\n${text}`;
+    else out.push({ role, text });
   }
   while (out.length && out[0].role !== "user") out.shift();
-  // Claude must answer the customer, so the thread has to end on their turn.
+  // The AI must answer the customer, so the thread has to end on their turn.
   while (out.length && out[out.length - 1].role !== "user") out.pop();
   return out;
 }
@@ -47,46 +48,21 @@ export interface Reply {
 
 export async function generateReply(conversationId: string): Promise<Reply> {
   const s = await getSettings();
-  const messages = toClaudeMessages((await getMessages(conversationId)).slice(-s.historyLimit));
-  if (!messages.length) throw new Error("No customer message to reply to.");
+  const turns = toTurns((await getMessages(conversationId)).slice(-s.historyLimit));
+  if (!turns.length) throw new Error("No customer message to reply to.");
 
-  const supportsFallback = s.model !== "claude-haiku-5-5";
   const started = Date.now();
-  const res = await anthropic.beta.messages.create({
-    model: s.model,
-    max_tokens: 4000,
-    system: systemPrompt(s),
-    messages,
-    output_config: { effort: s.effort },
-    // Opus/Sonnet: if a safety classifier declines, the API retries on Anthropic's recommended fallback model.
-    ...(supportsFallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
-  });
+  const res = await geminiChat({ system: systemPrompt(s), turns, model: s.model, thinking: s.effort });
+  const base = { model: res.model, latencyMs: Date.now() - started, inputTokens: res.inputTokens, outputTokens: res.outputTokens };
 
-  if (res.stop_reason === "refusal") {
-    return {
-      text: "",
-      handoff: true,
-      reason: "The AI declined to answer this message.",
-      model: res.model,
-      latencyMs: Date.now() - started,
-      inputTokens: res.usage.input_tokens,
-      outputTokens: res.usage.output_tokens,
-    };
-  }
-
-  const text = res.content
-    .flatMap((b) => (b.type === "text" ? [b.text] : []))
-    .join("")
-    .trim();
-  const handoff = text.includes(HANDOFF);
+  // Gemini's safety filters declined: let a person handle it.
+  if (res.blocked) return { ...base, text: "", handoff: true, reason: "The AI declined to answer this message." };
+  const handoff = res.text.includes(HANDOFF);
   return {
-    text: handoff ? "" : text,
+    ...base,
+    text: handoff ? "" : res.text,
     handoff,
-    reason: handoff ? text.split(HANDOFF)[1]?.trim() || "Agent requested a human." : undefined,
-    model: res.model,
-    latencyMs: Date.now() - started,
-    inputTokens: res.usage.input_tokens,
-    outputTokens: res.usage.output_tokens,
+    reason: handoff ? res.text.split(HANDOFF)[1]?.trim() || "Agent requested a human." : undefined,
   };
 }
 
@@ -141,12 +117,14 @@ export async function onInboundMessage(conversationId: string, body: string, raw
 
   if (s.agentMode === "n8n") return forwardToN8n(conversationId, rawBody, s.forwardUrl);
 
-  clearTimeout(timers.get(conversationId));
+  const key = `${await workspaceId()}:${conversationId}`;
+  const run = await bindWorkspace();
+  clearTimeout(timers.get(key));
   timers.set(
-    conversationId,
+    key,
     setTimeout(() => {
-      timers.delete(conversationId);
-      void runAgent(conversationId);
+      timers.delete(key);
+      void run(() => runAgent(conversationId));
     }, DEBOUNCE_MS),
   );
   return null;
@@ -197,7 +175,7 @@ async function forwardToN8n(conversationId: string, rawBody: string, url: string
 async function runAgent(conversationId: string) {
   try {
     if (!aiConfigured) {
-      await logAgentEvent({ conversationId, type: "error", detail: "ANTHROPIC_API_KEY is not set." });
+      await logAgentEvent({ conversationId, type: "error", detail: "GEMINI_API_KEY is not set." });
       return;
     }
     // A teammate may have taken over while we were waiting.

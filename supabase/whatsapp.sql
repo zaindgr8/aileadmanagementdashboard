@@ -138,3 +138,26 @@ drop trigger if exists wa_leads_touch on public.wa_leads;
 create trigger wa_leads_touch before update on public.wa_leads for each row execute function public.wa_leads_touch();
 
 alter table public.wa_leads enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- Team inbox: who handles each chat, agent availability, and internal notes.
+alter table public.conversations
+  add column if not exists assignee text references public.app_users (username) on update cascade on delete set null,
+  add column if not exists assigned_at timestamptz;
+create index if not exists conversations_assignee_idx on public.conversations (assignee) where assignee is not null;
+
+alter table public.app_users
+  add column if not exists wa_available boolean not null default true;
+
+create table if not exists public.conversation_notes (
+  id              uuid primary key default gen_random_uuid(),
+  conversation_id text not null references public.conversations (id) on delete cascade,
+  author          text not null,                    -- app_users.username, or 'system'
+  author_name     text not null default '',
+  body            text not null,
+  mentions        text[] not null default '{}',
+  kind            text not null default 'note' check (kind in ('note', 'event')),
+  created_at      timestamptz not null default now()
+);
+create index if not exists conversation_notes_conv_idx on public.conversation_notes (conversation_id, created_at);
+alter table public.conversation_notes enable row level security;

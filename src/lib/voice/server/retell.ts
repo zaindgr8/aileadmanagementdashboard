@@ -1,23 +1,31 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent, CallDetail, Concurrency, LeanCall, PhoneNumber } from '@/lib/voice/types';
 import { HttpError } from './http';
+import { workspaceId } from '@/lib/tenant/context';
+import { currentWorkspace, retellCreds } from '@/lib/tenant/workspaces';
 
 const RETELL = 'https://api.retellai.com';
 export const MAX_CALLS_PER_RANGE = 20000;
 export const E164 = /^\+[1-9]\d{6,14}$/;
 
-const allowed = () =>
-  new Set((process.env.ALLOWED_AGENT_IDS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
-export const agentAllowed = (id?: string) => {
-  const set = allowed();
+// Each workspace has its own Retell API key and (optionally) a list of agents it may use.
+// The primary workspace falls back to RETELL_API_KEY / ALLOWED_AGENT_IDS in .env.local.
+async function creds() {
+  const c = retellCreds(await currentWorkspace());
+  if (!c) throw new HttpError(400, 'Voice calls aren\'t connected for this workspace yet (Workspace settings → Connections).');
+  return c;
+}
+const allowed = async () => new Set((await creds()).agentIds);
+export const agentAllowed = async (id?: string) => {
+  const set = await allowed();
   return set.size === 0 || (!!id && set.has(id));
 };
-export const isRestricted = () => allowed().size > 0;
+export const isRestricted = async () => (await allowed()).size > 0;
+export const retellConfigured = async () => Boolean(retellCreds(await currentWorkspace()));
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- raw Retell payloads */
 async function retell<T = any>(path: string, { method = 'GET', body }: { method?: string; body?: unknown } = {}): Promise<T> {
-  const key = process.env.RETELL_API_KEY;
-  if (!key) throw new HttpError(500, 'RETELL_API_KEY is not set');
+  const key = (await creds()).apiKey;
   const res = await fetch(RETELL + path, {
     method,
     headers: { Authorization: `Bearer ${key}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
@@ -34,9 +42,10 @@ async function retell<T = any>(path: string, { method = 'GET', body }: { method?
   return data as T;
 }
 
-// Small in-process TTL cache so dashboard refreshes don't hammer Retell.
+// Small in-process TTL cache so dashboard refreshes don't hammer Retell. Keys are per workspace.
 const cache = new Map<string, { value: unknown; exp: number }>();
-export async function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+export async function cached<T>(name: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
+  const key = `${await workspaceId()}|${name}`;
   const hit = cache.get(key);
   if (hit && hit.exp > Date.now()) return hit.value as T;
   const value = await fn();
@@ -46,7 +55,10 @@ export async function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>
   cache.set(key, { value, exp: now + ttlMs });
   return value;
 }
-export const clearCallCache = () => cache.forEach((_, k) => k.startsWith('calls:') && cache.delete(k));
+export const clearCallCache = async () => {
+  const prefix = `${await workspaceId()}|calls:`;
+  cache.forEach((_, k) => k.startsWith(prefix) && cache.delete(k));
+};
 
 export function listAgents(): Promise<Agent[]> {
   return cached('agents', 60_000, async () => {
@@ -61,8 +73,9 @@ export function listAgents(): Promise<Agent[]> {
       out.push(...page.items);
       pagination_key = page.has_more ? page.pagination_key : undefined;
     } while (pagination_key);
+    const set = await allowed();
     return out
-      .filter((a) => agentAllowed(a.agent_id))
+      .filter((a) => set.size === 0 || set.has(a.agent_id))
       .map((a) => ({
         agent_id: a.agent_id,
         agent_name: a.agent_name || 'Untitled agent',
@@ -115,8 +128,8 @@ export function leanCall(c: any): LeanCall {
   };
 }
 
-export function baseFilter(): Record<string, unknown> {
-  const set = allowed();
+export async function baseFilter(): Promise<Record<string, unknown>> {
+  const set = await allowed();
   return set.size ? { agent: [...set].map((agent_id) => ({ agent_id })) } : {};
 }
 
@@ -136,7 +149,7 @@ export async function listCalls(filter_criteria: Record<string, unknown>): Promi
 
 export async function getCall(id: string): Promise<CallDetail> {
   const c = await retell(`/v2/get-call/${encodeURIComponent(id)}`);
-  if (!agentAllowed(c.agent_id)) throw new HttpError(404, 'Call not found');
+  if (!(await agentAllowed(c.agent_id))) throw new HttpError(404, 'Call not found');
   return {
     ...leanCall(c),
     analysis: c.call_analysis,
@@ -146,7 +159,7 @@ export async function getCall(id: string): Promise<CallDetail> {
   };
 }
 
-export function createPhoneCall(input: { from_number: string; to_number: string; agent_id?: string; variables: Record<string, string> }) {
+export async function createPhoneCall(input: { from_number: string; to_number: string; agent_id?: string; variables: Record<string, string> }) {
   return retell<{ call_id: string; call_status: string }>('/v2/create-phone-call', {
     method: 'POST',
     body: {
@@ -155,7 +168,7 @@ export function createPhoneCall(input: { from_number: string; to_number: string;
       idempotency_key: randomUUID(),
       ...(input.agent_id ? { override_agent_id: input.agent_id } : {}),
       retell_llm_dynamic_variables: input.variables,
-      metadata: { source: 'ai-lead-dashboard' },
+      metadata: { source: 'ai-lead-dashboard', workspace: await workspaceId() },
     },
   });
 }
@@ -172,7 +185,7 @@ export async function assertCallable(from_number: string, agent_id?: string) {
   if (agent_id) {
     const agents = await listAgents();
     if (!agents.some((a) => a.agent_id === agent_id)) throw new HttpError(400, 'That agent is not available.');
-  } else if (!phone.outbound_agent_id || !agentAllowed(phone.outbound_agent_id)) {
+  } else if (!phone.outbound_agent_id || !(await agentAllowed(phone.outbound_agent_id))) {
     throw new HttpError(400, 'Pick an agent for this call.');
   }
 }

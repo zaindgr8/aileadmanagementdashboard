@@ -14,8 +14,8 @@ export const GET = route(async () => {
   // Pull live progress for the most recent campaigns.
   const withStats = await Promise.all(batches.slice(0, 25).map(async (b): Promise<Batch> => {
     try {
-      const calls = await cached(`batch:${b.batch_call_id}`, 20_000, () =>
-        listCalls({ ...baseFilter(), batch_call_id: { type: 'string', op: 'eq', value: b.batch_call_id } }));
+      const calls = await cached(`batch:${b.batch_call_id}`, 20_000, async () =>
+        listCalls({ ...(await baseFilter()), batch_call_id: { type: 'string', op: 'eq', value: b.batch_call_id } }));
       const by = (s: string) => calls.filter((c) => c.status === s).length;
       return {
         ...b,

@@ -1,9 +1,10 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, Hand, MessageCircle, Search, X } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowRight, Download, Hand, MessageCircle, Search, X } from "lucide-react";
 import { api, timeAgo, useLive } from "@/lib/whatsapp/client";
-import { Avatar } from "@/components/whatsapp/ui";
+import { Avatar, PriorityBadge, ScoreRing } from "@/components/whatsapp/ui";
+import type { Priority } from "@/lib/whatsapp/types";
 
 type WaLead = {
   phone: string;
@@ -18,6 +19,8 @@ type WaLead = {
   notes: string;
   last_seen: string | null;
   created_at: string;
+  /** AI score of the matching chat. */
+  ai: { score: number; priority: Priority | null; intent: string; summary: string; nextStep: string; source: string } | null;
 };
 
 // Freya's stages (set by the n8n Profile Updater).
@@ -47,6 +50,7 @@ export default function LeadsPage() {
   const [stage, setStage] = useState("all");
   const [interest, setInterest] = useState("all");
   const [handoffOnly, setHandoffOnly] = useState(false);
+  const [sort, setSort] = useState<"score" | "recent">("score");
   const [open, setOpen] = useState<WaLead | null>(null);
 
   const load = useCallback(() => {
@@ -64,16 +68,21 @@ export default function LeadsPage() {
 
   const visible = useMemo(() => {
     const q = query.toLowerCase().trim();
-    return (leads ?? []).filter((l) => {
+    const out = (leads ?? []).filter((l) => {
       if (stage !== "all" && l.stage !== stage) return false;
       if (interest !== "all" && !codes(l.interest).includes(interest)) return false;
       if (handoffOnly && !l.handoff) return false;
-      if (q && !`${l.phone} ${l.name} ${l.wa_name} ${l.query} ${l.notes}`.toLowerCase().includes(q)) return false;
+      if (q && !`${l.phone} ${l.name} ${l.wa_name} ${l.query} ${l.notes} ${l.ai?.intent ?? ""}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [leads, query, stage, interest, handoffOnly]);
+    if (sort === "score") out.sort((a, b) => (b.ai?.score ?? -1) - (a.ai?.score ?? -1));
+    return out;
+  }, [leads, query, stage, interest, handoffOnly, sort]);
 
   const handoffs = (leads ?? []).filter((l) => l.handoff).length;
+  const scored = (leads ?? []).filter((l) => l.ai);
+  const avg = scored.length ? Math.round(scored.reduce((t, l) => t + (l.ai?.score ?? 0), 0) / scored.length) : null;
+  const p1 = scored.filter((l) => l.ai?.priority === "P1" || l.ai?.priority === "P2").length;
   const openChat = (l: WaLead) => router.push(`/whatsapp?c=${encodeURIComponent(`whatsapp:${l.phone}`)}`);
 
   return (
@@ -89,6 +98,8 @@ export default function LeadsPage() {
 
         <div className="mb-3 flex flex-wrap gap-2 text-xs">
           <Stat label="Leads" value={leads?.length} />
+          <Stat label="Top priority (P1–P2)" value={p1} tone={p1 ? "text-brand" : ""} />
+          <Stat label="Avg score" value={avg ?? undefined} />
           <Stat label="Need a human" value={handoffs} tone={handoffs ? "text-warn" : ""} />
           <Stat label="Qualified" value={counts.qualified ?? 0} />
           <Stat label="Booking link sent" value={counts.booking_link_sent ?? 0} />
@@ -108,6 +119,9 @@ export default function LeadsPage() {
             <option value="all">All interests</option>
             {interests.map((i) => <option key={i} value={i}>{LABELS[i] ?? i}</option>)}
           </select>
+          <button onClick={() => setSort((v) => (v === "score" ? "recent" : "score"))} className="btn" title="Change sort order">
+            <ArrowDownWideNarrow size={15} /> {sort === "score" ? "Top score" : "Recent"}
+          </button>
           <button onClick={() => setHandoffOnly((v) => !v)}
             className={`btn ${handoffOnly ? "border-transparent bg-warn-soft text-warn" : ""}`}>
             <Hand size={15} /> Handoff only
@@ -121,13 +135,13 @@ export default function LeadsPage() {
           <table className="w-full min-w-[1200px] text-sm">
             <thead className="bg-panel-2 text-left text-[11px] uppercase tracking-wide text-ink-3">
               <tr>
-                {["Lead", "Phone", "Query", "Association", "Interest", "Business owner", "Stage", "Handoff", "Notes", "Last seen", ""].map((h) => (
+                {["Lead", "Score", "Phone", "Query", "Association", "Interest", "Business owner", "Stage", "Handoff", "Notes", "Last seen", ""].map((h) => (
                   <th key={h} className="whitespace-nowrap px-3 py-2.5 font-semibold">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {!leads && !error && [0, 1, 2, 3].map((i) => <tr key={i}><td colSpan={11} className="px-3 py-2"><div className="skeleton h-9" /></td></tr>)}
+              {!leads && !error && [0, 1, 2, 3].map((i) => <tr key={i}><td colSpan={12} className="px-3 py-2"><div className="skeleton h-9" /></td></tr>)}
               {visible.map((l) => (
                 <tr key={l.phone} onClick={() => setOpen(l)} className="cursor-pointer border-t border-line align-top hover:bg-panel-2">
                   <td className="px-3 py-2.5">
@@ -139,8 +153,18 @@ export default function LeadsPage() {
                       </div>
                     </div>
                   </td>
+                  <td className="px-3 py-2.5">
+                    {l.ai ? (
+                      <div className="flex items-center gap-2" title={l.ai.summary}>
+                        <ScoreRing score={l.ai.score} size={30} />
+                        {l.ai.priority && <PriorityBadge priority={l.ai.priority} />}
+                      </div>
+                    ) : <span className="text-ink-3">—</span>}
+                  </td>
                   <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-ink-2">{l.phone}</td>
-                  <td className="max-w-64 px-3 py-2.5"><p className="line-clamp-2">{l.query || "—"}</p></td>
+                  <td className="min-w-44 px-3 py-2.5" title={l.query}>
+                    <span className="font-medium">{l.ai?.intent || l.query || "—"}</span>
+                  </td>
                   <td className="px-3 py-2.5"><Codes value={l.association} /></td>
                   <td className="px-3 py-2.5"><Codes value={l.interest} /></td>
                   <td className="px-3 py-2.5 capitalize text-ink-2">{l.business_owner || "unknown"}</td>
@@ -174,7 +198,7 @@ function Stat({ label, value, tone = "" }: { label: string; value: number | unde
 
 function Stage({ value }: { value: string }) {
   const m = STAGES[value] ?? { label: value || "—", chip: "bg-panel-2 text-ink-2" };
-  return <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${m.chip}`}>{m.label}</span>;
+  return <span className={`inline-flex h-6 items-center whitespace-nowrap rounded-full px-2.5 text-[11px] font-semibold leading-none ${m.chip}`}>{m.label}</span>;
 }
 
 function Codes({ value }: { value: string }) {
@@ -217,6 +241,21 @@ function LeadDrawer({ lead, onClose, onOpenChat }: { lead: WaLead; onClose: () =
           <button onClick={onClose} className="rounded-lg p-1.5 text-ink-3 hover:bg-panel-2 hover:text-ink" aria-label="Close"><X size={18} /></button>
         </header>
         <div className="scroll-thin flex-1 space-y-5 overflow-y-auto px-5 py-4 text-sm">
+          {lead.ai && (
+            <section className="flex items-center gap-3 rounded-xl bg-panel-2 p-3">
+              <ScoreRing score={lead.ai.score} size={52} />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 font-semibold">
+                  {lead.ai.priority && <PriorityBadge priority={lead.ai.priority} />}
+                  <span className="truncate">{lead.ai.intent}</span>
+                </div>
+                <p className="mt-0.5 text-xs leading-snug text-ink-2">{lead.ai.summary}</p>
+              </div>
+            </section>
+          )}
+          {lead.ai?.nextStep && (
+            <p className="flex items-start gap-1.5 font-medium"><ArrowRight size={15} className="mt-0.5 shrink-0 text-brand" />{lead.ai.nextStep}</p>
+          )}
           <section>
             <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-3">Query</h3>
             <p>{lead.query || "—"}</p>

@@ -1,7 +1,7 @@
 "use client";
 import { ChessKnight } from "lucide-react";
-import { STAGE_META, initials, scoreTone } from "@/lib/whatsapp/client";
-import type { LeadStage } from "@/lib/whatsapp/types";
+import { PRIORITY_META, STAGE_META, initials, scoreTone } from "@/lib/whatsapp/client";
+import type { LeadStage, Priority } from "@/lib/whatsapp/types";
 
 export function Logo({ size = 40 }: { size?: number }) {
   return (
@@ -26,8 +26,18 @@ export function Avatar({ name, size = 42 }: { name: string; size?: number }) {
 export function StageChip({ stage, className = "" }: { stage: LeadStage; className?: string }) {
   const m = STAGE_META[stage];
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${m.chip} ${className}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${m.dot}`} />{m.label}
+    <span className={`inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-[11px] font-semibold leading-none ${m.chip} ${className}`}>
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.dot}`} />{m.label}
+    </span>
+  );
+}
+
+/** P1–P4 badge, same size everywhere. */
+export function PriorityBadge({ priority, className = "" }: { priority: Priority; className?: string }) {
+  const m = PRIORITY_META[priority];
+  return (
+    <span title={m.hint} className={`inline-flex h-[18px] shrink-0 items-center rounded-md px-1.5 text-[10px] font-bold leading-none tracking-wide ${m.chip} ${className}`}>
+      {m.label}
     </span>
   );
 }

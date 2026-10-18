@@ -35,6 +35,9 @@ export interface Conversation {
   lastInboundAt?: string;
   createdAt: string;
   lead?: Lead;
+  /** Username of the teammate handling this chat. */
+  assignee?: string;
+  assignedAt?: string;
 }
 
 export const LEAD_STAGES = ["new", "qualified", "hot", "won", "lost"] as const;
@@ -54,18 +57,70 @@ export interface Lead {
   nextStep: string;
   /** Set when a teammate moved the stage by hand; the AI then stops changing it. */
   stageLocked?: boolean;
-  source: "ai" | "rules";
+  /** "ai" = scored by the old Claude scorer (kept for older records). */
+  source: "ai" | "rules" | "gemini";
   analyzedAt: string;
+  // Gemini insight (present when source is "gemini").
+  /** P1 = act now … P4 = not a sales lead. */
+  priority?: Priority;
+  /** Why the score is what it is, strongest first. */
+  reasons?: { text: string; impact: "positive" | "negative" }[];
+  urgency?: "high" | "medium" | "low";
+  sentiment?: "positive" | "neutral" | "negative";
+  category?: LeadCategory;
+  language?: string;
+  aiTags?: string[];
 }
 
-export type AgentModel = "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-5-5";
+export const PRIORITIES = ["P1", "P2", "P3", "P4"] as const;
+export type Priority = (typeof PRIORITIES)[number];
+export const LEAD_CATEGORIES = ["sales", "support", "member", "partnership", "spam", "other"] as const;
+export type LeadCategory = (typeof LEAD_CATEGORIES)[number];
+
+/** A teammate who can be assigned WhatsApp chats. */
+export interface Agent {
+  username: string;
+  name: string;
+  role: "owner" | "admin" | "member";
+  active: boolean;
+  available: boolean;
+  /** Open chats currently assigned to them. */
+  open: number;
+}
+
+export type AssignMode = "off" | "round_robin" | "least_busy";
+export interface AssignmentSettings {
+  mode: AssignMode;
+  /** Which chats get auto-assigned. */
+  when: "all" | "qualified" | "hot";
+  /** Max open chats per agent (0 = no limit). */
+  capacity: number;
+  /** Skip agents who switched themselves to away. */
+  onlyAvailable: boolean;
+  unassignOnResolve: boolean;
+  /** Last agent picked by round-robin. */
+  lastAssigned?: string;
+}
+
+export interface Note {
+  id: string;
+  conversationId: string;
+  author: string;
+  authorName: string;
+  body: string;
+  mentions: string[];
+  kind: "note" | "event";
+  createdAt: string;
+}
+
+export type AgentModel = "gemini-3.8-flash" | "gemini-3.5-flash" | "gemini-3.1-pro-preview" | "gemini-3.5-flash-lite";
 export type Effort = "low" | "medium" | "high";
 
-export type AgentMode = "n8n" | "claude";
+export type AgentMode = "n8n" | "builtin";
 
 export interface Settings {
   agentEnabled: boolean;
-  /** "n8n": forward messages to your n8n workflow. "claude": the built-in Claude agent replies. */
+  /** "n8n": forward messages to your n8n workflow. "builtin": the built-in Gemini agent replies. */
   agentMode: AgentMode;
   forwardUrl: string;
   businessName: string;
@@ -82,6 +137,7 @@ export interface Settings {
   leadScoring: boolean;
   /** What a qualified lead looks like for this business (fed to the scorer). */
   leadCriteria: string;
+  assignment: AssignmentSettings;
 }
 
 export type AgentEventType = "reply" | "forwarded" | "handoff" | "skipped" | "error";

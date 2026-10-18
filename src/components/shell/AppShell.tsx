@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, ChevronsLeft, ChevronsRight, LogOut, Menu, Moon, Search, Sun, X } from 'lucide-react';
+import WorkspaceSwitcher from './WorkspaceSwitcher';
 import type { SessionUser } from '@/lib/auth/modules';
 import { api, displayName, useLive } from '@/lib/whatsapp/client';
 import type { Conversation } from '@/lib/whatsapp/types';
@@ -25,7 +26,7 @@ export default function AppShell({ user, children }: { user: SessionUser; childr
   const path = usePathname();
   const router = useRouter();
   const { theme, toggle: toggleTheme } = useTheme();
-  const sections = useMemo(() => navFor(user.modules), [user.modules]);
+  const sections = useMemo(() => navFor(user), [user]);
   const hasWa = user.modules.includes('whatsapp');
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -87,6 +88,8 @@ export default function AppShell({ user, children }: { user: SessionUser; childr
           )}
         </Link>
       </div>
+
+      <WorkspaceSwitcher user={user} rail={rail} />
 
       <button onClick={() => setPalette(true)} title="Search & commands  ⌘K"
         className={`mx-3 mb-4 flex items-center gap-2 rounded-xl border border-white/10 bg-white/[.04] px-3 py-2 text-[13px] text-side-ink transition hover:border-white/20 hover:text-white ${rail ? 'justify-center px-0' : ''}`}>

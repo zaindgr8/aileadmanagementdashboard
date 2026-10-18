@@ -6,6 +6,7 @@ import type { LeadBrief, LeadDetail, LeadNote, LeadRecord, LeanCall } from '@/li
 import { q, qList, sb, sbAll } from '@/lib/supabase';
 import { HttpError } from './http';
 import { baseFilter, cached, E164, listCalls } from './retell';
+import { workspaceId, wsFilter } from '@/lib/tenant/context';
 
 // Call leads live in Supabase (`call_leads`, see supabase/schema.sql), next to the WhatsApp data.
 type Leads = Record<string, LeadRecord>;
@@ -53,8 +54,9 @@ function toRecord(r: LeadRow): LeadRecord {
   return rec;
 }
 
-function toRow(rec: LeadRecord): LeadRow {
+function toRow(rec: LeadRecord, workspace_id: string): LeadRow & { workspace_id: string } {
   return {
+    workspace_id,
     phone: rec.phone,
     name: rec.name ?? null,
     email: rec.email ?? null,
@@ -74,36 +76,38 @@ function toRow(rec: LeadRecord): LeadRow {
 }
 
 async function upsert(recs: LeadRecord[]) {
+  const ws = await workspaceId();
   for (let i = 0; i < recs.length; i += 500) {
-    await sb('call_leads?on_conflict=phone', { method: 'POST', body: recs.slice(i, i + 500).map(toRow), prefer: 'resolution=merge-duplicates' });
+    await sb('call_leads?on_conflict=workspace_id,phone', { method: 'POST', body: recs.slice(i, i + 500).map((r) => toRow(r, ws)), prefer: 'resolution=merge-duplicates' });
   }
 }
 
 async function getRecord(phone: string): Promise<LeadRecord | undefined> {
-  const rows = await sb<LeadRow[]>(`call_leads?phone=eq.${q(phone)}&select=*`);
+  const rows = await sb<LeadRow[]>(`call_leads?${await wsFilter()}&phone=eq.${q(phone)}&select=*`);
   return rows[0] ? toRecord(rows[0]) : undefined;
 }
 
 async function getRecords(phones: string[]): Promise<Leads> {
   const out: Leads = {};
+  const w = await wsFilter();
   for (let i = 0; i < phones.length; i += 150) {
     const chunk = phones.slice(i, i + 150);
-    const rows = await sb<LeadRow[]>(`call_leads?select=*&phone=in.(${chunk.map(qList).join(',')})`);
+    const rows = await sb<LeadRow[]>(`call_leads?${w}&select=*&phone=in.(${chunk.map(qList).join(',')})`);
     for (const r of rows) out[r.phone] = toRecord(r);
   }
   return out;
 }
 
 export async function readLeads(): Promise<Leads> {
-  const rows = await sbAll<LeadRow>('call_leads?select=*&order=phone.asc');
+  const rows = await sbAll<LeadRow>(`call_leads?${await wsFilter()}&select=*&order=phone.asc`);
   return Object.fromEntries(rows.map((r) => [r.phone, toRecord(r)]));
 }
 
 /** Calls used to build the pipeline. Key starts with `calls:` so placing a call clears it. */
 export function leadCalls(): Promise<LeanCall[]> {
-  return cached('calls:leads', 30_000, () => {
+  return cached('calls:leads', 30_000, async () => {
     const end = Date.now();
-    return listCalls({ ...baseFilter(), start_timestamp: { type: 'range', op: 'bt', value: [end - LEAD_WINDOW_DAYS * 86400_000, end] } });
+    return listCalls({ ...(await baseFilter()), start_timestamp: { type: 'range', op: 'bt', value: [end - LEAD_WINDOW_DAYS * 86400_000, end] } });
   });
 }
 
@@ -179,7 +183,7 @@ export async function addNote(phone: string, text: string) {
 export async function deleteNote(phone: string, id: string) {
   const rec = await getRecord(phone);
   if (!rec?.notes) return;
-  await sb(`call_leads?phone=eq.${q(phone)}`, { method: 'PATCH', body: { notes: rec.notes.filter((n) => n.id !== id), updated_at: new Date().toISOString() } });
+  await sb(`call_leads?${await wsFilter()}&phone=eq.${q(phone)}`, { method: 'PATCH', body: { notes: rec.notes.filter((n) => n.id !== id), updated_at: new Date().toISOString() } });
 }
 
 export async function saveBrief(phone: string, brief: LeadBrief) {
@@ -189,7 +193,7 @@ export async function saveBrief(phone: string, brief: LeadBrief) {
 }
 
 export async function deleteLead(phone: string) {
-  await sb(`call_leads?phone=eq.${q(phone)}`, { method: 'DELETE' });
+  await sb(`call_leads?${await wsFilter()}&phone=eq.${q(phone)}`, { method: 'DELETE' });
 }
 
 export async function leadDetail(phone: string): Promise<LeadDetail> {

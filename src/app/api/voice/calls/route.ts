@@ -9,7 +9,7 @@ export const GET = route(async (req) => {
   const end = Number(sp.get('end')) || Date.now();
   const start = Number(sp.get('start')) || end - 30 * 86400_000;
   if (!(start < end)) throw new HttpError(400, 'Invalid date range');
-  const filter = { ...baseFilter(), start_timestamp: { type: 'range', op: 'bt', value: [start, end] } };
+  const filter = { ...(await baseFilter()), start_timestamp: { type: 'range', op: 'bt', value: [start, end] } };
   // The browser asks for "now minus N days" every time, so key on 15s buckets of both ends.
   const bucket = (t: number) => Math.floor(t / 15000);
   const calls = await cached(`calls:${bucket(start)}:${bucket(end)}`, 15_000, () => listCalls(filter));
@@ -24,7 +24,7 @@ export const POST = route(async (req) => {
   await assertCallable(from, body.agent_id || undefined);
   const variables = cleanVars(body.variables);
   const call = await createPhoneCall({ from_number: from, to_number: to, agent_id: body.agent_id || undefined, variables });
-  clearCallCache();
+  await clearCallCache();
   // Every number you call becomes a lead, named from the call variables when possible.
   await mergeLeads([{ phone: to, name: leadNameFrom(variables), source: 'Manual call' }]).catch((e) => console.error('lead save failed', e));
   return json({ call_id: call.call_id, status: call.call_status }, { status: 201 });

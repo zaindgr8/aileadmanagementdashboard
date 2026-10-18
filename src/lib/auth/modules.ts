@@ -15,6 +15,11 @@ export interface SessionUser {
   name: string;
   role: Role;
   modules: ModuleKey[];
+  /** The workspace (client account) they're signed in to. */
+  workspace: string;
+  workspaceName: string;
+  /** Platform admins run the whole product: approve workspaces and open any of them. */
+  platformAdmin: boolean;
 }
 
 /** Which module a path belongs to, if any. Used by the proxy and route guards. */
