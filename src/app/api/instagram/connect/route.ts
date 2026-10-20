@@ -14,6 +14,11 @@ export async function GET(req: Request) {
     back.searchParams.set("ig_error", "The Instagram app isn't set up on the server yet.");
     return NextResponse.redirect(back);
   }
+  // Meta only redirects to the https address registered on the app, so a local copy (localhost) can't connect.
+  if (!originOf(req).startsWith("https://")) {
+    back.searchParams.set("ig_error", "Instagram can only be connected from the live portal (https://portal.devmatesolutions.com), not from a local copy.");
+    return NextResponse.redirect(back);
+  }
   const redirectUri = `${originOf(req)}/api/instagram/callback`;
   return NextResponse.redirect(authorizeUrl(redirectUri, makeState(g.user.workspace, g.user.username)));
 }
