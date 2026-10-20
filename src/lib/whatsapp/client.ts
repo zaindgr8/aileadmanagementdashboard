@@ -88,8 +88,8 @@ export function timeAgo(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function displayName(c: { name: string; profileName: string; phone: string }) {
-  return c.name || c.profileName || c.phone;
+export function displayName(c: { name: string; profileName: string; phone: string; channel?: string }) {
+  return c.name || c.profileName || c.phone || (c.channel === "instagram" ? "Instagram user" : "Unknown");
 }
 
 export function initials(name: string) {

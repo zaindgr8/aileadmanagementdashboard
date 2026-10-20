@@ -36,7 +36,7 @@ export async function GET() {
       let scoreSum = 0, scored = 0;
       for (const c of convs) {
         if (c.lead) { stages[c.lead.stage]++; scoreSum += c.lead.score; scored++; }
-        const k = contact(c.phone);
+        const k = contact(c.phone || c.id);
         k.name ||= c.name || c.profileName;
         k.channels.push('whatsapp');
         k.waId = c.id;

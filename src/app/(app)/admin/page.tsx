@@ -122,6 +122,7 @@ export default function AdminPage() {
                   <th className="px-3 py-2.5 font-medium">Status</th>
                   <th className="px-3 py-2.5 font-medium">Modules</th>
                   <th className="px-3 py-2.5 font-medium">Connected</th>
+                  <th className="px-3 py-2.5 font-medium">Setup</th>
                   <th className="px-3 py-2.5 text-right font-medium">People</th>
                   <th className="px-3 py-2.5 text-right font-medium">Chats</th>
                   <th className="px-3 py-2.5 font-medium">Last activity</th>
@@ -150,6 +151,7 @@ export default function AdminPage() {
                         {w.modules.includes("calls") && <span title={w.connected.calls ? "Voice connected" : "Voice not connected"} className={w.connected.calls ? "text-ok" : ""}><PhoneCall size={16} /></span>}
                       </div>
                     </td>
+                    <td className="px-3 py-3"><SetupDots steps={w.setup} /></td>
                     <td className="px-3 py-3 text-right tabular-nums">{w.users}</td>
                     <td className="px-3 py-3 text-right tabular-nums">{w.conversations}</td>
                     <td className="px-3 py-3 text-ink-2">{ago(w.lastActivityAt)}</td>
@@ -161,7 +163,7 @@ export default function AdminPage() {
                     </td>
                   </tr>
                 ))}
-                {!shown.length && <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-ink-3">No workspaces here.</td></tr>}
+                {!shown.length && <tr><td colSpan={9} className="px-4 py-12 text-center text-sm text-ink-3">No workspaces here.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -171,6 +173,21 @@ export default function AdminPage() {
       {open && <WorkspaceDrawer id={open} onClose={() => setOpen(null)} onChanged={load} />}
       {creating && <OnboardModal onClose={() => setCreating(false)} onCreated={load} />}
     </div>
+  );
+}
+
+const STEP_LABEL: Record<string, string> = { account: "Account", whatsapp: "WhatsApp", instagram: "Instagram", business: "Business info", team: "Team", agent: "Agent live" };
+
+/** Each onboarding step as a dot: green done, grey to do (optional steps are hollow). */
+function SetupDots({ steps }: { steps: WorkspaceSummary["setup"] }) {
+  const done = steps.filter((s) => s.done).length;
+  return (
+    <span className="flex items-center gap-1.5" title={steps.map((s) => `${s.done ? "✓" : "·"} ${STEP_LABEL[s.key]}${s.optional ? " (optional)" : ""}`).join("\n")}>
+      {steps.map((s) => (
+        <span key={s.key} className={`h-2.5 w-2.5 rounded-full ${s.done ? "bg-ok" : s.optional ? "border border-line" : "bg-line"}`} />
+      ))}
+      <span className="ml-1 text-xs tabular-nums text-ink-3">{done}/{steps.length}</span>
+    </span>
   );
 }
 

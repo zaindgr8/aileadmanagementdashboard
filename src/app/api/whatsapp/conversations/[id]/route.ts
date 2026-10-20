@@ -4,6 +4,7 @@ import { addNote, listAgents } from "@/lib/whatsapp/team";
 import { currentUser } from "@/lib/auth/current";
 import type { Lead } from "@/lib/whatsapp/types";
 import { sessionOpen } from "@/lib/whatsapp/twilio";
+import { instagramWindow } from "@/lib/instagram/send";
 import type { Conversation } from "@/lib/whatsapp/types";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +14,7 @@ export async function GET(_: Request, { params }: Ctx) {
   const id = decodeURIComponent((await params).id);
   const [c, messages] = await Promise.all([getConversation(id), getMessages(id)]);
   if (!c) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json({ conversation: { ...c, sessionOpen: sessionOpen(c.lastInboundAt) }, messages });
+  return NextResponse.json({ conversation: { ...c, sessionOpen: sessionOpen(c.lastInboundAt), lateReply: c.channel === "instagram" && instagramWindow(c.lastInboundAt).humanAgent }, messages });
 }
 
 const EDITABLE = ["name", "aiEnabled", "needsHuman", "status", "tags", "notes", "unread", "aiInstructions", "aiInstructionsMode"] as const;

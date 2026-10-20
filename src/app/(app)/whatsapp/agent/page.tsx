@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, Bot, CheckCircle2, Copy, Forward, Hand, Loader2, Pause, Play, SkipForward, Target, Workflow } from "lucide-react";
 import { api, timeAgo, useLive } from "@/lib/whatsapp/client";
 import type { AgentEvent, Settings } from "@/lib/whatsapp/types";
+import { DraftAgentButton, GoLiveBar, type AgentDraft } from "@/components/whatsapp/AgentBuilder";
 
 type Env = { twilioConfigured: boolean; aiConfigured: boolean; geminiModel: string | null; whatsappFrom: string; publicBaseUrl: string };
 
@@ -41,6 +42,16 @@ export default function AgentPage() {
     setTimeout(() => setSaved("idle"), 1500);
   };
 
+  // A draft from "Draft from business info": fill the fields, the user reviews and saves.
+  const applyDraft = (d: AgentDraft) => {
+    setS((p) => (p ? {
+      ...p, agentName: d.agentName || p.agentName, businessName: d.businessName || p.businessName, systemPrompt: d.systemPrompt,
+      handoffKeywords: d.handoffKeywords.length ? d.handoffKeywords : p.handoffKeywords, handoffMessage: d.handoffMessage || p.handoffMessage,
+      leadCriteria: d.leadCriteria || p.leadCriteria,
+    } : p));
+    setDirty(true);
+  };
+
   if (!s || !env) return <div className="grid h-full place-items-center text-ink-3"><Loader2 className="animate-spin" /></div>;
 
   const webhook = `${env.publicBaseUrl || "https://YOUR-PUBLIC-URL"}/api/webhooks/twilio`;
@@ -58,6 +69,7 @@ export default function AgentPage() {
             {s.agentEnabled ? <><Pause size={16} /> Pause agent everywhere</> : <><Play size={16} /> Resume agent</>}
           </button>
         </div>
+        <GoLiveBar />
 
         <div className={`mb-6 flex items-center gap-3 rounded-2xl px-5 py-4 ${s.agentEnabled ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn"}`}>
           {s.agentEnabled ? <Bot size={22} /> : <Pause size={22} />}
@@ -108,8 +120,12 @@ export default function AgentPage() {
               {s.agentMode === "n8n" && <p className="mt-2 text-xs text-ink-3">Your n8n workflow writes the replies, so use the same name there.</p>}
             </Card>
 
-            {s.agentMode === "builtin" && <>
-            <Card title="Persona & instructions" hint="This is the system prompt. Use {{business}} for your business name and {{agent}} for her name.">
+            {/* The built-in agent always answers Instagram, so these stay visible in n8n mode too. */}
+            <>
+            <Card title="Persona & instructions" hint={s.agentMode === "n8n"
+              ? "WhatsApp replies come from your n8n workflow. This prompt is used for Instagram DMs and ✨ AI drafts. Use {{business}} and {{agent}}."
+              : "This is the system prompt. Use {{business}} for your business name and {{agent}} for her name."}>
+              <DraftAgentButton onApply={applyDraft} />
               <label className="mb-3 block">
                 <span className="mb-1 block text-xs font-medium text-ink-2">Business name</span>
                 <input className="input" value={s.businessName} onChange={(e) => set("businessName", e.target.value)} />
@@ -144,7 +160,7 @@ export default function AgentPage() {
               </div>
             </Card>
 
-            </>}
+            </>
 
             <Card title="Human handoff" hint="When a customer uses one of these words, the chat is flagged for your team, the agent is switched off for it, and the customer gets this message.">
               <span className="mb-1 block text-xs font-medium text-ink-2">Trigger keywords (comma-separated)</span>

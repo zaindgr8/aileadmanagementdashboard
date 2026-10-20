@@ -2,7 +2,7 @@ import "server-only";
 import { geminiChat, geminiConfigured, type ChatTurn } from "../ai/gemini";
 import type { Message, Settings } from "./types";
 import { getConversation, getMessages, getSettings, logAgentEvent, updateConversation } from "./store";
-import { sendWhatsApp } from "./twilio";
+import { sendMessage } from "./send";
 import { bindWorkspace, workspaceId } from "../tenant/context";
 
 const HANDOFF = "[[HANDOFF]]";
@@ -97,7 +97,7 @@ async function handoff(conversationId: string, reason: string, notifyCustomer: b
   const s = await getSettings();
   await updateConversation(conversationId, { aiEnabled: false, needsHuman: true, handoffReason: reason });
   await logAgentEvent({ conversationId, type: "handoff", detail: reason });
-  if (notifyCustomer && s.handoffMessage) await sendWhatsApp({ to: conversationId, body: s.handoffMessage, author: "ai" });
+  if (notifyCustomer && s.handoffMessage) await sendMessage({ to: conversationId, body: s.handoffMessage, author: "ai" });
 }
 
 // Customers often send several short messages in a row; wait briefly and answer them together.
@@ -113,7 +113,7 @@ export async function onInboundMessage(conversationId: string, body: string, raw
   const [s, conv] = await Promise.all([getSettings(), getConversation(conversationId)]);
   if (!conv) return null;
 
-  const who = s.agentMode === "n8n" ? "n8n" : "AI";
+  const who = s.agentMode === "n8n" && !conversationId.startsWith("instagram:") ? "n8n" : "AI";
   if (!s.agentEnabled) {
     await logAgentEvent({ conversationId, type: "skipped", detail: `Agent is paused globally — not sent to ${who}.` });
     return null;
@@ -131,12 +131,13 @@ export async function onInboundMessage(conversationId: string, body: string, raw
   }
 
   if (s.businessHoursOnly && !withinBusinessHours(s)) {
-    await sendWhatsApp({ to: conversationId, body: s.outOfHoursMessage, author: "ai" }).catch(console.error);
+    await sendMessage({ to: conversationId, body: s.outOfHoursMessage, author: "ai" }).catch(console.error);
     await logAgentEvent({ conversationId, type: "skipped", detail: "Outside business hours — sent out-of-hours message." });
     return null;
   }
 
-  if (s.agentMode === "n8n") return forwardToN8n(conversationId, rawBody, s.forwardUrl);
+  // The n8n workflow speaks Twilio (WhatsApp); Instagram chats are always answered by the built-in agent.
+  if (s.agentMode === "n8n" && !conversationId.startsWith("instagram:")) return forwardToN8n(conversationId, rawBody, s.forwardUrl);
 
   const key = `${await workspaceId()}:${conversationId}`;
   const run = await bindWorkspace();
@@ -209,7 +210,7 @@ async function runAgent(conversationId: string) {
       return;
     }
     if (!r.text) return;
-    await sendWhatsApp({ to: conversationId, body: r.text, author: "ai" });
+    await sendMessage({ to: conversationId, body: r.text, author: "ai" });
     await logAgentEvent({
       conversationId,
       type: "reply",

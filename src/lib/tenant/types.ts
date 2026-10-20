@@ -10,12 +10,56 @@ export interface WorkspaceConfig {
   twilioFrom?: string;
   twilioMessagingServiceSid?: string;
   retellAgentIds?: string[];
+  /** The Instagram professional account connected with "Connect Instagram". */
+  instagram?: InstagramAccount;
 }
+
+export interface InstagramAccount {
+  /** Instagram professional account id (the id Meta's webhooks use). */
+  userId: string;
+  username: string;
+  name?: string;
+  picture?: string;
+  connectedAt: string;
+  connectedBy?: string;
+  tokenExpiresAt?: string;
+}
+
+/** What a client tells us about their business while onboarding (used to build their agent). */
+export interface BusinessInfo {
+  website?: string;
+  about?: string;
+  offer?: string;
+  prices?: string;
+  customers?: string;
+  faqs?: string;
+  goal?: string;
+  bookingLink?: string;
+  tone?: string;
+  languages?: string;
+  agentName?: string;
+}
+
+export interface OnboardingDoc { id: string; name: string; chars: number; addedAt: string; text: string }
+
+export interface Onboarding {
+  business?: BusinessInfo;
+  docs?: OnboardingDoc[];
+  /** When the client finished the business step. */
+  submittedAt?: string;
+  /** Set by a platform admin when the agent is built and switched on. */
+  agentLiveAt?: string;
+  agentLiveBy?: string;
+}
+
+export type SetupStepKey = "account" | "whatsapp" | "instagram" | "business" | "team" | "agent";
+export interface SetupStep { key: SetupStepKey; done: boolean; optional?: boolean }
 
 /** Stored encrypted. */
 export interface WorkspaceSecrets {
   twilioAuthToken?: string;
   retellApiKey?: string;
+  instagramToken?: string;
 }
 
 export interface WorkspaceInfo {
@@ -38,6 +82,7 @@ export interface WorkspaceInfo {
 
 /** A row in the admin console. */
 export interface WorkspaceSummary extends WorkspaceInfo {
+  setup: SetupStep[];
   users: number;
   conversations: number;
   lastActivityAt?: string;

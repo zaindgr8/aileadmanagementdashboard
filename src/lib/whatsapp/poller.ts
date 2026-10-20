@@ -3,6 +3,7 @@ import { countConversations } from "./store";
 import { importHistory, twilioConfigured } from "./twilio";
 import { inWorkspace, workspaceId } from "../tenant/context";
 import { listWorkspaces } from "../tenant/workspaces";
+import { refreshAllTokens } from "../instagram/connect";
 
 // Messages your n8n workflow sends go straight through Twilio, so the dashboard
 // checks Twilio regularly to show them (and their delivery status) in the chats.
@@ -51,5 +52,8 @@ export function startPoller() {
   if (INTERVAL_MS <= 0 || g.__waPollerWs) return;
   g.__waPollerWs = setInterval(() => void syncAllWorkspaces(), INTERVAL_MS);
   void syncAllWorkspaces();
+  // Instagram tokens last ~60 days; renew them well before they run out.
+  setInterval(() => void refreshAllTokens(), 6 * 3_600_000);
+  void refreshAllTokens();
   console.log(`[sync] Checking Twilio for new WhatsApp messages every ${INTERVAL_MS / 1000}s`);
 }

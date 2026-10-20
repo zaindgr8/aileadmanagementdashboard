@@ -128,3 +128,14 @@ export async function geminiChat(opts: {
     outputTokens: (r.usageMetadata?.candidatesTokenCount ?? 0) + (r.usageMetadata?.thoughtsTokenCount ?? 0),
   };
 }
+
+/** Read a document (PDF, Word, text, image…) and return plain text, for building an agent's knowledge. */
+export async function geminiReadFile(opts: { data: string; mimeType: string; prompt: string; model?: string; timeoutMs?: number }): Promise<string> {
+  const model = opts.model ?? GEMINI_MODEL;
+  const r = await generate(model, {
+    contents: [{ role: "user", parts: [{ inlineData: { mimeType: opts.mimeType, data: opts.data } }, { text: opts.prompt }] }],
+    generationConfig: { temperature: 0.1, maxOutputTokens: 8000, thinkingConfig: { thinkingLevel: "low" } },
+  }, opts.timeoutMs ?? 60_000);
+  if (blocked(r)) throw new GeminiError("Gemini declined to read this file.", 422);
+  return textOf(r).trim();
+}

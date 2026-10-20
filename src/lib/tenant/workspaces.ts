@@ -3,7 +3,7 @@ import { q, sb } from "../supabase";
 import { MODULES, type ModuleKey } from "../auth/modules";
 import { decrypt, encrypt } from "./crypto";
 import { workspaceId } from "./context";
-import type { WorkspaceConfig, WorkspaceInfo, WorkspaceSecrets, WorkspaceStatus } from "./types";
+import type { Onboarding, WorkspaceConfig, WorkspaceInfo, WorkspaceSecrets, WorkspaceStatus } from "./types";
 
 // A workspace is one client account: its own chats, leads, team, settings and API keys.
 // The primary workspace is the original install; anything it hasn't saved falls back to .env.local.
@@ -18,6 +18,7 @@ interface Row {
   contact_name: string;
   contact_email: string;
   config: WorkspaceConfig | null;
+  onboarding: Onboarding | null;
   secrets: string | null;
   notes: string;
   created_at: string;
@@ -27,6 +28,7 @@ interface Row {
 
 export interface Workspace extends WorkspaceInfo {
   secrets: WorkspaceSecrets;
+  onboarding: Onboarding;
 }
 
 const toWorkspace = (r: Row): Workspace => {
@@ -41,7 +43,8 @@ const toWorkspace = (r: Row): Workspace => {
     contactName: r.contact_name,
     contactEmail: r.contact_email,
     config: r.config ?? {},
-    secretsSet: { twilioAuthToken: Boolean(secrets.twilioAuthToken), retellApiKey: Boolean(secrets.retellApiKey) },
+    onboarding: r.onboarding ?? {},
+    secretsSet: { twilioAuthToken: Boolean(secrets.twilioAuthToken), retellApiKey: Boolean(secrets.retellApiKey), instagramToken: Boolean(secrets.instagramToken) },
     notes: r.notes,
     createdAt: new Date(r.created_at).toISOString(),
     approvedAt: r.approved_at ? new Date(r.approved_at).toISOString() : undefined,
@@ -51,7 +54,7 @@ const toWorkspace = (r: Row): Workspace => {
 };
 
 /** Strip the decrypted keys before anything goes to the browser. */
-export const publicInfo = ({ secrets: _s, ...info }: Workspace): WorkspaceInfo => (void _s, info);
+export const publicInfo = ({ secrets: _s, onboarding: _o, ...info }: Workspace): WorkspaceInfo => (void _s, void _o, info);
 
 // Short cache: workspaces are read on every webhook and request but change rarely.
 const g = globalThis as typeof globalThis & { __wsCache?: Map<string, { at: number; ws: Workspace | null }> };
@@ -116,6 +119,8 @@ export async function createWorkspace(w: { name: string; status: WorkspaceStatus
 
 export type WorkspacePatch = Partial<Pick<WorkspaceInfo, "name" | "status" | "plan" | "modules" | "notes" | "contactName" | "contactEmail">> & {
   config?: WorkspaceConfig;
+  /** Merged into the saved onboarding data. */
+  onboarding?: Partial<Onboarding>;
   /** A key set to "" removes it; keys left out stay as they are. */
   secrets?: Partial<WorkspaceSecrets>;
   approvedBy?: string;
@@ -139,6 +144,7 @@ export async function updateWorkspace(id: string, patch: WorkspacePatch): Promis
     }
   }
   if (patch.config) body.config = { ...current.config, ...patch.config };
+  if (patch.onboarding) body.onboarding = { ...current.onboarding, ...patch.onboarding };
   if (patch.secrets) {
     const next: WorkspaceSecrets = { ...current.secrets };
     for (const [k, v] of Object.entries(patch.secrets) as [keyof WorkspaceSecrets, string | undefined][]) {

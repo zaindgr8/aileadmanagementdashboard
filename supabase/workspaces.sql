@@ -176,3 +176,6 @@ grant execute on function public.workspace_stats() to service_role;
 
 -- Make yourself a platform admin (can approve workspaces and open any of them):
 -- update public.app_users set platform_admin = true where username = 'your-username';
+
+-- Client self-onboarding: business info, uploaded documents (as extracted text) and agent status.
+alter table public.workspaces add column if not exists onboarding jsonb not null default '{}'::jsonb;

@@ -1,6 +1,6 @@
 import {
   BarChart3, Bot, History, Kanban, LayoutDashboard, LayoutGrid, ListChecks, Megaphone, MessageCircle, PhoneCall,
-  PhoneOutgoing, Settings2, ShieldCheck, UserCog, Users, type LucideIcon,
+  PhoneOutgoing, Rocket, Settings2, ShieldCheck, UserCog, Users, type LucideIcon,
 } from 'lucide-react';
 import type { ModuleKey, SessionUser } from '@/lib/auth/modules';
 
@@ -42,6 +42,7 @@ export function navFor(user: SessionUser): NavSection[] {
   const sections = NAV.filter((s) => !s.module || user.modules.includes(s.module));
   const manage: NavItem[] = [];
   if (user.role === 'owner' || user.role === 'admin' || user.platformAdmin) {
+    manage.push({ href: '/setup', label: 'Get started', icon: Rocket, hint: 'Connect your channels and set up your AI agent' });
     manage.push({ href: '/settings', label: 'Workspace settings', icon: Settings2, hint: 'Connections, people and invites' });
   }
   if (user.platformAdmin) manage.push({ href: '/admin', label: 'Admin console', icon: ShieldCheck, hint: 'All client workspaces' });

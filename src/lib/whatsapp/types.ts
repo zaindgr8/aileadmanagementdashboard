@@ -18,9 +18,12 @@ export interface Message {
   error?: string;
 }
 
+export type Channel = "whatsapp" | "instagram";
+
 export interface Conversation {
-  id: string; // customer address, e.g. "whatsapp:+15551234567"
-  phone: string; // "+15551234567"
+  id: string; // customer address, e.g. "whatsapp:+15551234567" or "instagram:1784…" (Instagram-scoped user id)
+  channel: Channel;
+  phone: string; // "+15551234567" (empty for Instagram)
   profileName: string;
   name: string; // custom display name set in the dashboard
   aiEnabled: boolean;
@@ -122,6 +125,17 @@ export type Effort = "low" | "medium" | "high";
 
 export type AgentMode = "n8n" | "builtin";
 
+export interface CommentRule {
+  id: string;
+  enabled: boolean;
+  /** Any of these words in a comment triggers the rule (case-insensitive). Empty = every comment. */
+  keywords: string[];
+  /** The private DM sent to the commenter (Instagram allows one per comment, within 7 days). */
+  dm: string;
+  /** Optional public reply under their comment, e.g. "Sent you a DM 📩". */
+  publicReply?: string;
+}
+
 export interface Settings {
   agentEnabled: boolean;
   /** "n8n": forward messages to your n8n workflow. "builtin": the built-in Gemini agent replies. */
@@ -144,6 +158,8 @@ export interface Settings {
   /** What a qualified lead looks like for this business (fed to the scorer). */
   leadCriteria: string;
   assignment: AssignmentSettings;
+  /** Instagram: comment a keyword on a post or reel → get a DM. */
+  instagramRules: CommentRule[];
 }
 
 export type AgentEventType = "reply" | "forwarded" | "handoff" | "skipped" | "error";

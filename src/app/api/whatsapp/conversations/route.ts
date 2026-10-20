@@ -2,6 +2,7 @@ import { NextResponse, after } from "next/server";
 import { listConversations } from "@/lib/whatsapp/store";
 import { seedDemoIfEmpty } from "@/lib/whatsapp/demo";
 import { sessionOpen } from "@/lib/whatsapp/twilio";
+import { instagramWindow } from "@/lib/instagram/send";
 import { backfillLeads } from "@/lib/whatsapp/leads";
 import { syncFromTwilio } from "@/lib/whatsapp/poller";
 import { bindWorkspace } from "@/lib/tenant/context";
@@ -15,5 +16,5 @@ export async function GET() {
   after(() => run(syncFromTwilio));
   after(() => run(backfillLeads).catch((err) => console.error("[leads]", err)));
   const conversations = await listConversations();
-  return NextResponse.json(conversations.map((c) => ({ ...c, sessionOpen: sessionOpen(c.lastInboundAt) })));
+  return NextResponse.json(conversations.map((c) => ({ ...c, sessionOpen: sessionOpen(c.lastInboundAt), lateReply: c.channel === "instagram" && instagramWindow(c.lastInboundAt).humanAgent })));
 }

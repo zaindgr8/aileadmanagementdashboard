@@ -7,10 +7,11 @@ import {
 import { api, displayName, priorityRank, STAGE_META, timeAgo, useAgentName, useLive, waitingSince, waitTone } from "@/lib/whatsapp/client";
 import { LEAD_STAGES, type Agent, type Conversation, type Lead, type Message, type Note } from "@/lib/whatsapp/types";
 import type { SessionUser } from "@/lib/auth/modules";
-import { Avatar, PriorityBadge, ScoreRing, StageChip } from "@/components/whatsapp/ui";
+import { Avatar, ChannelBadge, PriorityBadge, ScoreRing, StageChip } from "@/components/whatsapp/ui";
 import NewMessage from "@/components/whatsapp/NewMessage";
 
-type Conv = Conversation & { sessionOpen: boolean };
+/** sessionOpen: free replies allowed (24h). lateReply: Instagram, 24h–7d, a person may still reply (Human Agent). */
+type Conv = Conversation & { sessionOpen: boolean; lateReply?: boolean };
 type Template = { sid: string; name: string; language: string; status: string; variables: Record<string, string> };
 
 const FILTERS = [
@@ -22,6 +23,8 @@ const FILTERS = [
   { key: "ai", label: "AI" },
   { key: "manual", label: "Manual" },
   { key: "resolved", label: "Resolved" },
+  { key: "whatsapp", label: "WhatsApp" },
+  { key: "instagram", label: "Instagram" },
 ] as const;
 type FilterKey = (typeof FILTERS)[number]["key"];
 type View = "all" | "mine" | "unassigned";
@@ -128,6 +131,8 @@ export default function Inbox() {
       unassigned: list.filter(needsOwner).length,
     };
   }, [list, inView, me]);
+  // Channel filters only matter once there are Instagram chats.
+  const hasInstagram = useMemo(() => list.some((c) => c.channel === "instagram"), [list]);
   const teammateName = useMemo(() => new Map(agents.map((a) => [a.username, a.name])), [agents]);
 
   const visible = useMemo(() => {
@@ -143,6 +148,8 @@ export default function Inbox() {
         case "ai": return c.aiEnabled && c.status === "open";
         case "manual": return !c.aiEnabled && c.status === "open";
         case "resolved": return c.status === "resolved";
+        case "whatsapp": return c.channel !== "instagram";
+        case "instagram": return c.channel === "instagram";
         default: return true;
       }
     });
@@ -220,7 +227,7 @@ export default function Inbox() {
           </label>
         </div>
         <div className="scroll-thin flex gap-1.5 overflow-x-auto px-4 pb-3">
-          {FILTERS.map((f) => {
+          {FILTERS.filter((f) => hasInstagram || (f.key !== "whatsapp" && f.key !== "instagram")).map((f) => {
             const n = f.key === "unread" ? counts.unread : f.key === "human" ? counts.human : f.key === "hot" ? counts.hot : f.key === "waiting" ? counts.waiting : 0;
             return (
               <button key={f.key} onClick={() => setFilter(f.key)}
@@ -244,6 +251,7 @@ export default function Inbox() {
                 {selected === c.id && <span className="absolute inset-y-2 left-0 w-[3px] rounded-r bg-brand" />}
                 <span className="relative">
                   <Avatar name={displayName(c)} />
+                  <ChannelBadge channel={c.channel} />
                   {c.lead && <span className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-panel ${STAGE_META[c.lead.stage].dot}`} title={STAGE_META[c.lead.stage].label} />}
                 </span>
                 <div className="min-w-0 flex-1">
@@ -449,13 +457,13 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
         <header className="flex items-center gap-3 border-b border-line bg-panel px-3 py-2.5 md:px-5">
           <button onClick={onBack} className="rounded-lg p-1.5 text-ink-2 hover:bg-panel-2 md:hidden" aria-label="Back"><ArrowLeft size={20} /></button>
           <button onClick={toggleLead} className="flex min-w-0 items-center gap-3 text-left">
-            <Avatar name={name} size={38} />
+            <span className="relative"><Avatar name={name} size={38} /><ChannelBadge channel={conv.channel} /></span>
             <span className="min-w-0">
               <span className="flex items-center gap-2">
                 <span className="truncate text-sm font-semibold">{name}</span>
                 {conv.lead && <StageChip stage={conv.lead.stage} className="hidden sm:inline-flex" />}
               </span>
-              <span className="block truncate text-xs text-ink-3">{conv.phone}{conv.lead?.company ? ` · ${conv.lead.company}` : conv.profileName && conv.name ? ` · ${conv.profileName}` : ""}</span>
+              <span className="block truncate text-xs text-ink-3">{conv.channel === "instagram" ? "Instagram" : conv.phone}{conv.lead?.company ? ` · ${conv.lead.company}` : conv.profileName && conv.name ? ` · ${conv.profileName}` : ""}</span>
             </span>
           </button>
           <div className="ml-auto flex items-center gap-1.5">
@@ -517,12 +525,19 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
           </div>
           {mode === "brief" ? (
             <AgentInstructions key={conv.id} conv={conv} agentName={agentName} onSave={async (p) => { await patch(p); flash(p.aiInstructions ? `${agentName} will follow the new brief from her next reply` : "Brief removed"); }} />
-          ) : mode === "reply" && !conv.sessionOpen && conv.lastInboundAt ? (
+          ) : mode === "reply" && !conv.sessionOpen && conv.lastInboundAt && !conv.lateReply ? (
+            conv.channel === "instagram" ? (
+              <div className="flex items-center gap-3 rounded-xl bg-panel-2 px-4 py-3 text-sm">
+                <Clock size={16} className="text-warn" />
+                <span className="flex-1 text-ink-2">Instagram only allows replies within 7 days of the customer&apos;s last message. You can message again once they write to you.</span>
+              </div>
+            ) : (
             <div className="flex flex-wrap items-center gap-3 rounded-xl bg-panel-2 px-4 py-3 text-sm">
               <Clock size={16} className="text-warn" />
               <span className="flex-1 text-ink-2">The 24-hour WhatsApp window is closed. You can only send an approved template until the customer replies.</span>
               <button onClick={openTemplates} className="btn btn-primary py-1.5 text-xs"><FileText size={14} /> Send template</button>
             </div>
+            )
           ) : (
             <div className="relative flex items-end gap-2">
               {mentionHits.length > 0 && (
@@ -556,6 +571,9 @@ function Thread({ conv, agents, me, onBack, onChanged, flash, setLocal }: {
                 {mode === "note" ? <StickyNote size={17} /> : <Send size={17} />}
               </button>
             </div>
+          )}
+          {mode === "reply" && conv.lateReply && (
+            <p className="mt-1.5 text-[11px] text-warn">Over 24 hours since their last message: you can still reply yourself for up to 7 days (sent as a teammate). {agentName} can&apos;t reply until they write again.</p>
           )}
           <p className="mt-1.5 hidden text-[11px] text-ink-3 md:block">
             {conv.aiEnabled ? `${agentName} is replying automatically. Sending a message yourself pauses ${agentName} for this chat.` : `${agentName} is off for this chat — you're in control.`}
@@ -704,7 +722,8 @@ function StatusTick({ status }: { status: string }) {
 }
 
 function MediaView({ url, type }: { url: string; type: string }) {
-  const src = `/api/whatsapp/media?url=${encodeURIComponent(url)}`;
+  // Twilio media needs our account login (proxied); Instagram's are signed public links.
+  const src = url.startsWith("https://api.twilio.com/") ? `/api/whatsapp/media?url=${encodeURIComponent(url)}` : url;
   // eslint-disable-next-line @next/next/no-img-element
   if (type.startsWith("image/")) return <img src={src} alt="" loading="lazy" className="mb-1 max-h-72 rounded-lg" />;
   if (type.startsWith("audio/")) return <audio controls preload="none" src={src} className="mb-1 max-w-full" />;

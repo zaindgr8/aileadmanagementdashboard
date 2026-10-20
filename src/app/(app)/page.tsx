@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import SetupBanner from '@/components/shell/SetupBanner';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight, BellRing, Flame, Hand, Loader2, MessageCircle, PhoneCall, RefreshCw, Search, TriangleAlert, Users,
@@ -88,6 +89,7 @@ export default function Home() {
           <button onClick={load} disabled={loading} className="btn ml-auto"><RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Refresh</button>
         </div>
 
+        <SetupBanner />
         {error && <div className="mb-6 rounded-xl bg-bad-soft px-4 py-3 text-sm text-bad">{error}</div>}
 
         {!data ? <Skeleton /> : (

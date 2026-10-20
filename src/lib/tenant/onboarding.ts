@@ -4,7 +4,8 @@ import type { ModuleKey } from "../auth/modules";
 import { emailTaken, hashPassword, usernameTaken } from "../auth/users";
 import { EMAIL, USERNAME } from "./invites";
 import { createWorkspace, listWorkspaces, publicInfo, retellCreds, twilioCreds } from "./workspaces";
-import type { WorkspaceSummary } from "./types";
+import type { SetupStep, WorkspaceSummary } from "./types";
+import type { Workspace } from "./workspaces";
 
 /** Self sign-up: a new workspace waiting for approval, with the person signing up as its owner. */
 export async function signup(s: { company: string; name: string; email: string; username: string; password: string; modules?: ModuleKey[] }) {
@@ -35,6 +36,19 @@ export async function signup(s: { company: string; name: string; email: string; 
   return { workspace: ws };
 }
 
+/** The client's "Get started" checklist, worked out from what's actually connected and saved. */
+export function setupSteps(ws: Workspace, people: number): SetupStep[] {
+  const steps: SetupStep[] = [{ key: "account", done: true }];
+  if (ws.modules.includes("whatsapp")) {
+    steps.push({ key: "whatsapp", done: Boolean(twilioCreds(ws)) });
+    steps.push({ key: "instagram", done: Boolean(ws.config.instagram), optional: true });
+  }
+  steps.push({ key: "business", done: Boolean(ws.onboarding.submittedAt) });
+  steps.push({ key: "team", done: people > 1, optional: true });
+  steps.push({ key: "agent", done: Boolean(ws.onboarding.agentLiveAt) });
+  return steps;
+}
+
 interface StatRow { workspace_id: string; users: number; conversations: number; last_activity: string | null }
 
 /** Every workspace with headline numbers, for the admin console. */
@@ -49,6 +63,7 @@ export async function workspaceSummaries(): Promise<WorkspaceSummary[]> {
       conversations: Number(s?.conversations ?? 0),
       lastActivityAt: s?.last_activity ? new Date(s.last_activity).toISOString() : undefined,
       connected: { whatsapp: Boolean(twilioCreds(w)), calls: Boolean(retellCreds(w)) },
+      setup: setupSteps(w, Number(s?.users ?? 0)),
     };
   });
 }

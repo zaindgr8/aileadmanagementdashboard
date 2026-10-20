@@ -6,6 +6,7 @@ import {
 import { api } from "@/lib/whatsapp/client";
 import type { Invite, WorkspaceInfo } from "@/lib/tenant/types";
 import type { ModuleKey } from "@/lib/auth/modules";
+import InstagramCard from "@/components/settings/InstagramCard";
 
 type Source = "workspace" | "env" | null;
 type View = {
@@ -30,6 +31,16 @@ export default function WorkspaceSettings() {
   const [tab, setTab] = useState<Tab>("connections");
   const load = useCallback(() => api<View>("/api/workspace").then(setV).catch((e) => setError(e.message)), []);
   useEffect(() => { load(); }, [load]);
+  // Back from "Connect Instagram": show how it went, then tidy the address bar.
+  const [igNotice, setIgNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const ok = q.get("ig"), bad = q.get("ig_error");
+    if (!ok && !bad) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- read once from the redirect back
+    setIgNotice(ok ? { ok: true, text: `Instagram connected: @${ok}. New DMs will appear in the inbox.` } : { ok: false, text: bad! });
+    window.history.replaceState(null, "", "/settings");
+  }, []);
 
   if (!v) return <div className="grid h-full place-items-center text-ink-3">{error ? <p className="text-sm text-danger">{error}</p> : <Loader2 className="animate-spin" />}</div>;
   const w = v.workspace;
@@ -51,6 +62,11 @@ export default function WorkspaceSettings() {
           ))}
         </div>
 
+        {igNotice && (
+          <div className={`mb-4 flex items-start gap-2 rounded-xl px-4 py-3 text-sm ${igNotice.ok ? "bg-ok-soft text-ok" : "bg-danger-soft text-danger"}`}>
+            <span className="flex-1">{igNotice.text}</span><button onClick={() => setIgNotice(null)}><X size={16} /></button>
+          </div>
+        )}
         {error && <div className="mb-4 flex items-start gap-2 rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger"><span className="flex-1">{error}</span><button onClick={() => setError("")}><X size={16} /></button></div>}
         {!v.canManage && <p className="mb-4 rounded-xl bg-info-soft px-4 py-3 text-sm text-info">Only the workspace owner and admins can change these settings.</p>}
 
@@ -181,6 +197,8 @@ function Connections({ v, onSaved }: { v: View; onSaved: (v: View) => void }) {
           )}
         </section>
       )}
+
+      {wa && <InstagramCard canManage={v.canManage} />}
 
       {calls && (
         <section className="card overflow-hidden">

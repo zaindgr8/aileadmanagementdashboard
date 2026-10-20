@@ -33,6 +33,7 @@ export const DEFAULT_SETTINGS: Settings = {
   leadCriteria: `A qualified lead has a clear need we can solve and shares contact details or asks about pricing.
 A hot lead mentions budget, a timeline, or asks to book a call or meeting.`,
   assignment: { mode: "off", when: "all", capacity: 0, onlyAvailable: true, unassignOnResolve: false },
+  instagramRules: [],
 };
 
 type Global = typeof globalThis & { __waBus?: EventEmitter };
@@ -55,6 +56,7 @@ const isoOpt = (v: string | null) => (v ? iso(v) : undefined);
 // ---------- row mapping ----------
 interface ConvRow {
   id: string;
+  channel: Conversation["channel"] | null;
   phone: string;
   profile_name: string;
   name: string;
@@ -79,6 +81,7 @@ interface ConvRow {
 function toConversation(r: ConvRow): Conversation {
   return {
     id: r.id,
+    channel: r.channel === "instagram" ? "instagram" : "whatsapp",
     phone: r.phone,
     profileName: r.profile_name,
     name: r.name,
@@ -103,6 +106,7 @@ function toConversation(r: ConvRow): Conversation {
 
 const CONV_COLUMNS: Record<keyof Conversation, keyof ConvRow> = {
   id: "id",
+  channel: "channel",
   phone: "phone",
   profileName: "profile_name",
   name: "name",
@@ -191,7 +195,9 @@ function toAgentEvent(r: AgentEventRow): AgentEvent {
 async function defaults(): Promise<Settings> {
   const w = await currentWorkspace();
   const n8n = w.isPrimary ? process.env.N8N_WEBHOOK_URL || "" : "";
-  return { ...DEFAULT_SETTINGS, businessName: w.name, agentMode: n8n ? "n8n" : "builtin", forwardUrl: n8n };
+  // A new client's agent stays off until it's built and a platform admin marks it live (Get started → step 6).
+  const live = w.isPrimary || Boolean(w.onboarding?.agentLiveAt);
+  return { ...DEFAULT_SETTINGS, businessName: w.name, agentEnabled: live, agentMode: n8n ? "n8n" : "builtin", forwardUrl: n8n };
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -227,7 +233,11 @@ export async function ensureConversation(id: string, profileName = ""): Promise<
   const w = await workspaceId();
   await sb("conversations?on_conflict=workspace_id,id", {
     method: "POST",
-    body: { workspace_id: w, id, phone: id.replace(/^whatsapp:/, ""), profile_name: profileName },
+    body: {
+      workspace_id: w, id, profile_name: profileName,
+      channel: id.startsWith("instagram:") ? "instagram" : "whatsapp",
+      phone: id.startsWith("whatsapp:") ? id.slice("whatsapp:".length) : "",
+    },
     prefer: "resolution=ignore-duplicates",
   });
   if (profileName) {
