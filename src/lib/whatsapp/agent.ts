@@ -109,11 +109,13 @@ const timers = (g.__waTimers ??= new Map());
  * Decide what happens to an incoming customer message. Returns the HTTP response for Twilio
  * (n8n's response is passed through so TwiML replies from the workflow keep working).
  */
-export async function onInboundMessage(conversationId: string, body: string, rawBody: string): Promise<Response | null> {
+export async function onInboundMessage(conversationId: string, body: string, rawBody: string, opts: { canForward?: boolean } = {}): Promise<Response | null> {
   const [s, conv] = await Promise.all([getSettings(), getConversation(conversationId)]);
   if (!conv) return null;
 
-  const who = s.agentMode === "n8n" && !conversationId.startsWith("instagram:") ? "n8n" : "AI";
+  // The n8n workflow speaks Twilio: only Twilio WhatsApp messages can be forwarded to it.
+  const forward = s.agentMode === "n8n" && !conversationId.startsWith("instagram:") && opts.canForward !== false;
+  const who = forward ? "n8n" : "AI";
   if (!s.agentEnabled) {
     await logAgentEvent({ conversationId, type: "skipped", detail: `Agent is paused globally — not sent to ${who}.` });
     return null;
@@ -136,8 +138,8 @@ export async function onInboundMessage(conversationId: string, body: string, raw
     return null;
   }
 
-  // The n8n workflow speaks Twilio (WhatsApp); Instagram chats are always answered by the built-in agent.
-  if (s.agentMode === "n8n" && !conversationId.startsWith("instagram:")) return forwardToN8n(conversationId, rawBody, s.forwardUrl);
+  // Instagram and WhatsApp Cloud API chats are always answered by the built-in agent.
+  if (forward) return forwardToN8n(conversationId, rawBody, s.forwardUrl);
 
   const key = `${await workspaceId()}:${conversationId}`;
   const run = await bindWorkspace();

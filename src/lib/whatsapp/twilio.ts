@@ -3,6 +3,8 @@ import twilio from "twilio";
 import type { Author, Message } from "./types";
 import { getSettings, knownMessageStatuses, updateMessageStatus, upsertMessage } from "./store";
 import { scheduleLeadAnalysis } from "./leads";
+import { cloudFor } from "../whatsapp-cloud/connect";
+import * as cloudApi from "../whatsapp-cloud/api";
 import { currentWorkspace, publicBaseUrl, twilioCreds, type TwilioCreds, type Workspace } from "../tenant/workspaces";
 
 // Each workspace has its own Twilio account and WhatsApp sender (Workspace settings → Connections).
@@ -30,6 +32,11 @@ export async function twilioFor(): Promise<TwilioCtx | null> {
 
 export async function twilioConfigured() {
   return Boolean(await twilioFor());
+}
+
+/** WhatsApp is connected one way or the other: Meta's Cloud API (Embedded Signup) or Twilio. */
+export async function whatsappConnected() {
+  return Boolean((await cloudFor()) || (await twilioFor()));
 }
 
 async function requireTwilio(): Promise<TwilioCtx> {
@@ -69,6 +76,21 @@ export async function sendWhatsApp({ to, body = "", author, contentSid, contentV
     media: [],
     createdAt: new Date().toISOString(),
   };
+
+  // Connected through Meta's Embedded Signup: send with the Cloud API.
+  const cloud = await cloudFor();
+  if (cloud) {
+    try {
+      const id = contentSid?.startsWith("meta:")
+        ? await cloudApi.sendTemplate(cloud.token, cloud.account.phoneNumberId, conversationId, ...splitTemplate(contentSid), contentVariables)
+        : await cloudApi.sendText(cloud.token, cloud.account.phoneNumberId, conversationId, body);
+      return upsertMessage({ ...base, id: id || `wa_${crypto.randomUUID()}`, status: "sent" });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      await upsertMessage({ ...base, id: `failed_${crypto.randomUUID()}`, status: "failed", error });
+      throw err;
+    }
+  }
 
   const t = await twilioFor();
   if (!t) {
@@ -147,7 +169,15 @@ function templateBody(types: unknown): string {
   return "";
 }
 
+/** "meta:name|en_US" → ["name", "en_US"]. */
+function splitTemplate(sid: string): [string, string] {
+  const [name, language] = sid.slice("meta:".length).split("|");
+  return [name, language || "en_US"];
+}
+
 export async function listTemplates() {
+  const cloud = await cloudFor();
+  if (cloud) return cloudApi.listTemplates(cloud.token, cloud.account.wabaId);
   const items = await (await requireTwilio()).client.content.v1.contentAndApprovals.list({ limit: 100 });
   return items.map((t) => ({
     sid: t.sid,

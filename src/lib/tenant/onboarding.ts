@@ -40,7 +40,7 @@ export async function signup(s: { company: string; name: string; email: string; 
 export function setupSteps(ws: Workspace, people: number): SetupStep[] {
   const steps: SetupStep[] = [{ key: "account", done: true }];
   if (ws.modules.includes("whatsapp")) {
-    steps.push({ key: "whatsapp", done: Boolean(twilioCreds(ws)) });
+    steps.push({ key: "whatsapp", done: Boolean(twilioCreds(ws) || ws.config.whatsappCloud) });
     steps.push({ key: "instagram", done: Boolean(ws.config.instagram), optional: true });
   }
   steps.push({ key: "business", done: Boolean(ws.onboarding.submittedAt) });
@@ -62,7 +62,7 @@ export async function workspaceSummaries(): Promise<WorkspaceSummary[]> {
       users: Number(s?.users ?? 0),
       conversations: Number(s?.conversations ?? 0),
       lastActivityAt: s?.last_activity ? new Date(s.last_activity).toISOString() : undefined,
-      connected: { whatsapp: Boolean(twilioCreds(w)), calls: Boolean(retellCreds(w)) },
+      connected: { whatsapp: Boolean(twilioCreds(w) || w.config.whatsappCloud), calls: Boolean(retellCreds(w)) },
       setup: setupSteps(w, Number(s?.users ?? 0)),
     };
   });

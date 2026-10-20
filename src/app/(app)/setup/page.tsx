@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/whatsapp/client";
 import type { BusinessInfo, SetupStep, SetupStepKey } from "@/lib/tenant/types";
+import ConnectWhatsApp from "@/components/settings/ConnectWhatsApp";
 
 type View = {
   workspace: { id: string; name: string; modules: string[] };
@@ -100,7 +101,7 @@ export default function SetupPage() {
                 </button>
                 {isOpen && (
                   <div className="border-t border-line bg-panel-2/40 px-5 py-4">
-                    {s.key === "whatsapp" && <WhatsAppStep done={s.done} canEdit={v.canEdit} />}
+                    {s.key === "whatsapp" && <WhatsAppStep done={s.done} canEdit={v.canEdit} onConnected={load} onError={setError} />}
                     {s.key === "instagram" && <InstagramStep done={s.done} v={v} />}
                     {s.key === "business" && <BusinessStep v={v} onSaved={(r) => { setV(r); if (r.submittedAt) setOpen(r.steps.find((x) => !x.done && x.key !== "agent")?.key ?? null); }} onError={setError} />}
                     {s.key === "team" && <TeamStep canEdit={v.canEdit} />}
@@ -120,10 +121,22 @@ export default function SetupPage() {
   );
 }
 
-function WhatsAppStep({ done, canEdit }: { done: boolean; canEdit: boolean }) {
+function WhatsAppStep({ done, canEdit, onConnected, onError }: { done: boolean; canEdit: boolean; onConnected: () => void; onError: (m: string) => void }) {
+  const [signup, setSignup] = useState<{ appId: string; configId: string; version: string } | null | undefined>(undefined);
+  useEffect(() => {
+    if (done) return;
+    api<{ signup: { appId: string; configId: string; version: string } | null }>("/api/whatsapp-cloud").then((r) => setSignup(r.signup)).catch(() => setSignup(null));
+  }, [done]);
   if (done) return <p className="flex items-center gap-2 text-sm text-ok"><CheckCircle2 size={16} />WhatsApp is connected. New messages arrive in your Inbox.</p>;
   return (
     <div className="space-y-3 text-sm">
+      {signup && canEdit && (
+        <div className="rounded-xl border border-brand/30 bg-panel p-4">
+          <p className="font-semibold">Connect in a few clicks <span className="ml-1 rounded-md bg-brand/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand">FASTEST</span></p>
+          <p className="mb-3 mt-1 text-ink-2">Log in with Facebook, pick or create your WhatsApp Business account and verify your number by SMS. Meta bills message fees to your own card.</p>
+          <ConnectWhatsApp signup={signup} onConnected={onConnected} onError={onError} />
+        </div>
+      )}
       <div className="grid gap-3 md:grid-cols-2">
         <div className="rounded-xl border border-brand/30 bg-panel p-4">
           <p className="font-semibold">Set it up with us <span className="ml-1 rounded-md bg-brand/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand">EASIEST</span></p>

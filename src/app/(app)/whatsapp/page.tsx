@@ -723,7 +723,7 @@ function StatusTick({ status }: { status: string }) {
 
 function MediaView({ url, type }: { url: string; type: string }) {
   // Twilio media needs our account login (proxied); Instagram's are signed public links.
-  const src = url.startsWith("https://api.twilio.com/") ? `/api/whatsapp/media?url=${encodeURIComponent(url)}` : url;
+  const src = url.startsWith("https://api.twilio.com/") || url.startsWith("meta-media:") ? `/api/whatsapp/media?url=${encodeURIComponent(url)}` : url;
   // eslint-disable-next-line @next/next/no-img-element
   if (type.startsWith("image/")) return <img src={src} alt="" loading="lazy" className="mb-1 max-h-72 rounded-lg" />;
   if (type.startsWith("audio/")) return <audio controls preload="none" src={src} className="mb-1 max-w-full" />;

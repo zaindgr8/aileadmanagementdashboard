@@ -1,13 +1,13 @@
 import "server-only";
 import { countConversations, ensureConversation, updateConversation, upsertMessage, logAgentEvent } from "./store";
-import { twilioConfigured } from "./twilio";
+import { whatsappConnected } from "./twilio";
 import { currentWorkspace } from "../tenant/workspaces";
 import type { Author, Lead } from "./types";
 
 /** Fill an empty dashboard with sample chats so you can explore it before connecting Twilio (primary workspace only:
  * a new client should see their own empty inbox, not made-up chats). */
 export async function seedDemoIfEmpty() {
-  if (process.env.DISABLE_DEMO === "true" || !(await currentWorkspace()).isPrimary || (await twilioConfigured())) return;
+  if (process.env.DISABLE_DEMO === "true" || !(await currentWorkspace()).isPrimary || (await whatsappConnected())) return;
   if (await countConversations()) return;
 
   const now = Date.now();

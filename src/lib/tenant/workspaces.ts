@@ -44,7 +44,7 @@ const toWorkspace = (r: Row): Workspace => {
     contactEmail: r.contact_email,
     config: r.config ?? {},
     onboarding: r.onboarding ?? {},
-    secretsSet: { twilioAuthToken: Boolean(secrets.twilioAuthToken), retellApiKey: Boolean(secrets.retellApiKey), instagramToken: Boolean(secrets.instagramToken) },
+    secretsSet: { twilioAuthToken: Boolean(secrets.twilioAuthToken), retellApiKey: Boolean(secrets.retellApiKey), instagramToken: Boolean(secrets.instagramToken), whatsappCloudToken: Boolean(secrets.whatsappCloudToken), whatsappCloudPin: Boolean(secrets.whatsappCloudPin) },
     notes: r.notes,
     createdAt: new Date(r.created_at).toISOString(),
     approvedAt: r.approved_at ? new Date(r.approved_at).toISOString() : undefined,

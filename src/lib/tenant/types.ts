@@ -12,6 +12,17 @@ export interface WorkspaceConfig {
   retellAgentIds?: string[];
   /** The Instagram professional account connected with "Connect Instagram". */
   instagram?: InstagramAccount;
+  /** WhatsApp connected through Meta's Embedded Signup (WhatsApp Cloud API). */
+  whatsappCloud?: WhatsAppCloudAccount;
+}
+
+export interface WhatsAppCloudAccount {
+  wabaId: string;
+  phoneNumberId: string;
+  displayPhone: string;
+  verifiedName: string;
+  connectedAt: string;
+  connectedBy?: string;
 }
 
 export interface InstagramAccount {
@@ -60,6 +71,8 @@ export interface WorkspaceSecrets {
   twilioAuthToken?: string;
   retellApiKey?: string;
   instagramToken?: string;
+  whatsappCloudToken?: string;
+  whatsappCloudPin?: string;
 }
 
 export interface WorkspaceInfo {

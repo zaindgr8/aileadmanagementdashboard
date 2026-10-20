@@ -7,6 +7,7 @@ import { api } from "@/lib/whatsapp/client";
 import type { Invite, WorkspaceInfo } from "@/lib/tenant/types";
 import type { ModuleKey } from "@/lib/auth/modules";
 import InstagramCard from "@/components/settings/InstagramCard";
+import WhatsAppCloudCard from "@/components/settings/WhatsAppCloudCard";
 
 type Source = "workspace" | "env" | null;
 type View = {
@@ -156,11 +157,13 @@ function Connections({ v, onSaved }: { v: View; onSaved: (v: View) => void }) {
     <div className="space-y-6">
       {err && <p className="rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger">{err}</p>}
 
+      {wa && <WhatsAppCloudCard canManage={v.canManage} />}
+
       {wa && (
         <section className="card overflow-hidden">
           <header className="flex items-center gap-3 border-b border-line px-5 py-4">
             <span className="grid h-9 w-9 place-items-center rounded-xl bg-[#25D366]/15 text-[#128C7E]"><MessageCircle size={18} /></span>
-            <div className="min-w-0 flex-1 leading-tight"><h2 className="font-semibold">WhatsApp (Twilio)</h2><p className="text-xs text-ink-3">The number your customers message. Each workspace uses its own Twilio account.</p></div>
+            <div className="min-w-0 flex-1 leading-tight"><h2 className="font-semibold">WhatsApp via Twilio <span className="ml-1 text-xs font-normal text-ink-3">(alternative)</span></h2><p className="text-xs text-ink-3">Already have a Twilio WhatsApp sender? Use it here instead of the Meta connection above.</p></div>
             <Status ok={twConnected} />
           </header>
           <div className="grid gap-4 p-5 md:grid-cols-2">

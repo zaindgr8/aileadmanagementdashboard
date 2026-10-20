@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/whatsapp/store";
 import { aiConfigured } from "@/lib/whatsapp/agent";
 import { publicBaseUrl, twilioFor } from "@/lib/whatsapp/twilio";
+import { cloudFor } from "@/lib/whatsapp-cloud/connect";
 import type { Settings } from "@/lib/whatsapp/types";
 import { currentUser } from "@/lib/auth/current";
 import { geminiConfigured, GEMINI_MODEL } from "@/lib/ai/gemini";
@@ -9,10 +10,10 @@ import { geminiConfigured, GEMINI_MODEL } from "@/lib/ai/gemini";
 export const dynamic = "force-dynamic";
 
 async function env() {
-  const t = await twilioFor();
+  const [t, cloud] = await Promise.all([twilioFor(), cloudFor()]);
   return {
-    twilioConfigured: Boolean(t), aiConfigured, geminiConfigured, geminiModel: geminiConfigured ? GEMINI_MODEL : null,
-    whatsappFrom: t?.creds.from ?? "", publicBaseUrl: publicBaseUrl(), demo: !t,
+    twilioConfigured: Boolean(t || cloud), aiConfigured, geminiConfigured, geminiModel: geminiConfigured ? GEMINI_MODEL : null,
+    whatsappFrom: cloud ? `${cloud.account.displayPhone} (Meta)` : t?.creds.from ?? "", publicBaseUrl: publicBaseUrl(), demo: !t && !cloud,
   };
 }
 
